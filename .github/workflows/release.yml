@@ -1,0 +1,134 @@
+name: Build and Release Multi-Platform Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform_id: windows-x64
+            archive_ext: zip
+          - os: macos-latest
+            platform_id: macos-arm64
+            archive_ext: zip
+          - os: ubuntu-latest
+            platform_id: linux-x64
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pcscd libpcsclite-dev libxcb-cursor0
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build Executable with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --clean --windowed \
+            --name "ntag424-dna-provisioner" \
+            --hidden-import "smartcard" \
+            --hidden-import "smartcard.scard" \
+            --hidden-import "smartcard.pcsc" \
+            --hidden-import "smartcard.System" \
+            --hidden-import "cryptography" \
+            app.py
+
+      - name: Package Artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $distDir = "dist/ntag424-dna-provisioner"
+          if (Test-Path "dist/ntag424-dna-provisioner.exe") {
+            New-Item -ItemType Directory -Force -Path $distDir
+            Move-Item "dist/ntag424-dna-provisioner.exe" $distDir
+          }
+          Copy-Item -Recurse -Force "recipes" $distDir
+          Copy-Item -Force "README.md" $distDir
+          Compress-Archive -Path "$distDir/*" -DestinationPath "ntag424-dna-provisioner-${{ matrix.platform_id }}.zip"
+
+      - name: Package Artifacts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          if [ -d "dist/ntag424-dna-provisioner.app" ]; then
+            cp -R dist/ntag424-dna-provisioner.app dist/package/
+          elif [ -d "dist/ntag424-dna-provisioner" ]; then
+            cp -R dist/ntag424-dna-provisioner dist/package/
+          fi
+          cp -R recipes dist/package/
+          cp README.md dist/package/
+          cd dist/package && zip -r ../../ntag424-dna-provisioner-${{ matrix.platform_id }}.zip .
+
+      - name: Package Artifacts (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          cp -R dist/ntag424-dna-provisioner dist/package/
+          cp -R recipes dist/package/
+          cp README.md dist/package/
+          tar -czvf ntag424-dna-provisioner-${{ matrix.platform_id }}.tar.gz -C dist/package .
+
+      - name: Upload Build Artifact to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: ntag424-dna-provisioner-${{ matrix.platform_id }}
+          path: ntag424-dna-provisioner-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
+
+      - name: Determine Release Tag
+        id: tag_name
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_name.outputs.tag }}
+          name: Release ${{ steps.tag_name.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            ntag424-dna-provisioner-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
