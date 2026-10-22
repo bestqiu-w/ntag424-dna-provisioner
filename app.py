@@ -26,8 +26,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QHeaderView,
     QFileDialog,
     QMessageBox,
@@ -39,9 +38,27 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QStackedWidget,
     QSizePolicy,
+    QMenuBar,
+    QMenu,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor, QTextCursor, QIcon
+from PySide6.QtCore import (
+    Qt,
+    QThread,
+    Signal,
+    QAbstractTableModel,
+    QSortFilterProxyModel,
+    QModelIndex,
+    QUrl,
+)
+from PySide6.QtGui import (
+    QFont,
+    QColor,
+    QTextCursor,
+    QIcon,
+    QAction,
+    QKeySequence,
+    QDesktopServices,
+)
 
 from utils.config import (
     DEFAULT_CONFIG,
@@ -827,6 +844,329 @@ class RecipeEditDialog(QDialog):
 
 
 # ==============================================================================
+# 虚拟表格模型与过滤器 (Model / View 架构)
+# ==============================================================================
+class RecordTableModel(QAbstractTableModel):
+    """
+    高性能虚拟表格数据模型，零多余控件开销，支持万级记录流畅渲染。
+    """
+    COLUMNS = [
+        "时间",
+        "卡片 UID",
+        "作业类型",
+        "状态",
+        "主控 Key 0",
+        "SDM 签名 Key",
+        "NDEF 数据 / 模板",
+        "耗时",
+        "详细说明",
+    ]
+
+    def __init__(self, records: Optional[List[Dict[str, Any]]] = None, parent=None):
+        super().__init__(parent)
+        self._records: List[Dict[str, Any]] = records if records is not None else []
+        self._font_mono = QFont("Menlo", 9)
+        self._font_mono.setStyleHint(QFont.Monospace)
+        self._font_bold = QFont("Arial", 9, QFont.Bold)
+        self._color_success = QColor("#166534")
+        self._color_fail = QColor("#DC2626")
+        self._color_text = QColor("#1E293B")
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._records)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        return len(self.COLUMNS)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not (0 <= index.row() < len(self._records)):
+            return None
+
+        rec = self._records[index.row()]
+        col = index.column()
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                return rec.get("timestamp", "")
+            elif col == 1:
+                return rec.get("uid", "")
+            elif col == 2:
+                return rec.get("operation", "")
+            elif col == 3:
+                return "成功" if rec.get("status") == "SUCCESS" else "失败"
+            elif col == 4:
+                return rec.get("key0", "")
+            elif col == 5:
+                return rec.get("key_mac", "") or rec.get("key2_mac", "")
+            elif col == 6:
+                return rec.get("ndef_url", "")
+            elif col == 7:
+                return f"{rec.get('duration_ms', 0)} ms"
+            elif col == 8:
+                return rec.get("details", "")
+
+        elif role == Qt.ItemDataRole.ForegroundRole:
+            if col == 3:
+                return self._color_success if rec.get("status") == "SUCCESS" else self._color_fail
+            elif col in (1, 4, 5):
+                return self._color_text
+
+        elif role == Qt.ItemDataRole.FontRole:
+            if col in (1, 4, 5, 7):
+                return self._font_mono
+            elif col == 3:
+                return self._font_bold
+
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            if col in (0, 1, 2, 3, 7):
+                return int(Qt.AlignmentFlag.AlignCenter)
+            return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        elif role == Qt.ItemDataRole.ToolTipRole:
+            if col == 4:
+                return rec.get("key0", "")
+            elif col == 5:
+                return rec.get("key_mac", "") or rec.get("key2_mac", "")
+            elif col == 6:
+                return rec.get("ndef_url", "")
+            elif col == 8:
+                return rec.get("details", "")
+
+        elif role == Qt.ItemDataRole.UserRole:
+            if col == 7:
+                return rec.get("duration_ms", 0)
+            elif col == 0:
+                return rec.get("timestamp", "")
+
+        return None
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if 0 <= section < len(self.COLUMNS):
+                return self.COLUMNS[section]
+        return None
+
+    def add_record(self, record: Dict[str, Any]):
+        row = len(self._records)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._records.append(record)
+        self.endInsertRows()
+
+    def clear(self):
+        self.beginResetModel()
+        self._records.clear()
+        self.endResetModel()
+
+    def get_records(self) -> List[Dict[str, Any]]:
+        return self._records
+
+
+class RecordFilterProxyModel(QSortFilterProxyModel):
+    """
+    高性能即时搜索与状态过滤代理模型，支持全文字段匹配与数值列智能排序。
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._keyword = ""
+        self._status_filter = "ALL"  # "ALL", "SUCCESS", "FAIL"
+
+    def set_keyword(self, text: str):
+        self._keyword = text.strip().lower()
+        self.invalidate()
+
+    def set_status_filter(self, status: str):
+        self._status_filter = status
+        self.invalidate()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        model = self.sourceModel()
+        if not model or not hasattr(model, "_records"):
+            return True
+
+        if not (0 <= source_row < len(model._records)):
+            return False
+
+        rec = model._records[source_row]
+
+        # 1. 状态筛选
+        rec_status = rec.get("status", "")
+        if self._status_filter == "SUCCESS" and rec_status != "SUCCESS":
+            return False
+        elif self._status_filter == "FAIL" and rec_status == "SUCCESS":
+            return False
+
+        # 2. 关键词全文字段检索 (UID, URL, 说明, Key0)
+        if self._keyword:
+            uid = rec.get("uid", "").lower()
+            url = rec.get("ndef_url", "").lower()
+            details = rec.get("details", "").lower()
+            key0 = rec.get("key0", "").lower()
+            if (self._keyword not in uid and
+                self._keyword not in url and
+                self._keyword not in details and
+                self._keyword not in key0):
+                return False
+
+        return True
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        col = left.column()
+        if col == 7:  # 耗时按整数数值大小排序，非字符串字典序
+            left_val = self.sourceModel().data(left, Qt.ItemDataRole.UserRole) or 0
+            right_val = self.sourceModel().data(right, Qt.ItemDataRole.UserRole) or 0
+            return left_val < right_val
+        return super().lessThan(left, right)
+
+
+# ==============================================================================
+# 在线更新检测线程与关于弹窗
+# ==============================================================================
+APP_VERSION = "v1.0.3"
+APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
+
+
+class UpdateCheckThread(QThread):
+    check_finished = Signal(bool, str, str, str)  # has_update, latest_tag, release_notes, download_url
+    check_error = Signal(str)
+
+    def run(self):
+        import urllib.request
+        import json
+        url = f"https://api.github.com/repos/{APP_GITHUB_REPO}/releases/latest"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "NTAG424-Provisioner-App"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    latest_tag = data.get("tag_name", "").strip()
+                    release_notes = data.get("body", "").strip()
+                    html_url = data.get("html_url", f"https://github.com/{APP_GITHUB_REPO}/releases")
+
+                    has_update = bool(latest_tag and latest_tag != APP_VERSION)
+                    self.check_finished.emit(has_update, latest_tag, release_notes, html_url)
+                    return
+            self.check_error.emit("服务器返回了未预期的 HTTP 状态码")
+        except Exception as e:
+            self.check_error.emit(str(e))
+
+
+class UpdateDialog(QDialog):
+    """新版本升级提醒弹窗。"""
+    def __init__(self, latest_tag: str, release_notes: str, download_url: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("发现软件新版本")
+        self.resize(520, 360)
+        self.download_url = download_url
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        title = QLabel(f"🎉 发现新版本: {latest_tag} (当前版本: {APP_VERSION})")
+        title.setFont(QFont("Arial", 12, QFont.Bold))
+        title.setStyleSheet("color: #2563EB;")
+        layout.addWidget(title)
+
+        lbl_notes = QLabel("更新日志与发行说明:")
+        lbl_notes.setStyleSheet("font-weight: bold; color: #475569;")
+        layout.addWidget(lbl_notes)
+
+        txt_notes = QTextEdit()
+        txt_notes.setReadOnly(True)
+        txt_notes.setText(release_notes or "(本次发行暂无详细说明日志)")
+        txt_notes.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 4px; padding: 6px; font-size: 11px;")
+        layout.addWidget(txt_notes)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+
+        btn_ignore = QPushButton("稍后再说")
+        btn_ignore.setStyleSheet("background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 14px; font-size: 11px;")
+        btn_ignore.clicked.connect(self.reject)
+        btn_box.addWidget(btn_ignore)
+
+        btn_download = QPushButton("立即前往下载")
+        btn_download.setStyleSheet("background-color: #2563EB; color: white; border: none; border-radius: 4px; padding: 6px 18px; font-size: 11px; font-weight: bold;")
+        btn_download.clicked.connect(self._open_download)
+        btn_box.addWidget(btn_download)
+
+        layout.addLayout(btn_box)
+
+    def _open_download(self):
+        QDesktopServices.openUrl(QUrl(self.download_url))
+        self.accept()
+
+
+class AboutDialog(QDialog):
+    """关于本软件对话框。"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("关于 NTAG 424 DNA 标签发卡与运维工具")
+        self.resize(500, 320)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        top_layout = QHBoxLayout()
+        top_layout.setSpacing(14)
+
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(base_dir, "assets", "icon.png")
+        lbl_logo = QLabel()
+        if os.path.exists(icon_path):
+            pix = QIcon(icon_path).pixmap(56, 56)
+            lbl_logo.setPixmap(pix)
+        top_layout.addWidget(lbl_logo)
+
+        v_head = QVBoxLayout()
+        lbl_name = QLabel("NTAG 424 DNA 标签发卡与运维工具")
+        lbl_name.setFont(QFont("Arial", 12, QFont.Bold))
+        lbl_name.setStyleSheet("color: #0F172A;")
+        v_head.addWidget(lbl_name)
+
+        lbl_ver = QLabel(f"版本: {APP_VERSION}  |  授权协议: MIT License")
+        lbl_ver.setStyleSheet("color: #64748B; font-size: 11px;")
+        v_head.addWidget(lbl_ver)
+        top_layout.addLayout(v_head)
+        top_layout.addStretch()
+
+        layout.addLayout(top_layout)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setStyleSheet("color: #E2E8F0;")
+        layout.addWidget(div)
+
+        desc = QLabel(
+            "基于 Python 3 与 PySide6 打造的高性能轻量桌面工具，专用于 NXP NTAG 424 DNA "
+            "防伪巡检标签的密钥注入、SUN / SDM 动态签名配置、出厂重置与诊断回读。\n\n"
+            "• 支持 ACS ACR122U 等标准 PC/SC 读写器\n"
+            "• 支持 HKDF-SHA256 与 AES-128-CMAC 双密码派生体系\n"
+            "• 原生支持 NDEF Multi-Record (URI + Android AAR) 复合注入"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #334155; font-size: 11px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        layout.addStretch()
+
+        btn_box = QHBoxLayout()
+        btn_repo = QPushButton("访问 GitHub 仓库")
+        btn_repo.setStyleSheet("background-color: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 12px; font-size: 11px;")
+        btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{APP_GITHUB_REPO}")))
+        btn_box.addWidget(btn_repo)
+        btn_box.addStretch()
+
+        btn_close = QPushButton("关闭")
+        btn_close.setStyleSheet("background-color: #2563EB; color: white; border: none; border-radius: 4px; padding: 4px 18px; font-size: 11px; font-weight: bold;")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+
+        layout.addLayout(btn_box)
+
+
+# ==============================================================================
 # 主窗口 (MainWindow)
 # ==============================================================================
 class MainWindow(QMainWindow):
@@ -847,6 +1187,11 @@ class MainWindow(QMainWindow):
             self.config["recipe_name"] = generate_random_recipe_name()
 
         self.records: List[Dict[str, Any]] = []
+        self.table_model = RecordTableModel(self.records, self)
+        self.proxy_model = RecordFilterProxyModel(self)
+        self.proxy_model.setSourceModel(self.table_model)
+        self.update_checker_thread: Optional[UpdateCheckThread] = None
+
         self.current_card_uid: Optional[str] = None
         self.is_reader_connected: bool = False
 
@@ -861,6 +1206,7 @@ class MainWindow(QMainWindow):
         self.worker.single_action_finished.connect(self.on_single_action_finished)
 
         self.setup_ui()
+        self.setup_menu_bar()
         self.update_recipe_banner()
         self.sync_worker_config()
 
@@ -1197,10 +1543,47 @@ class MainWindow(QMainWindow):
         t_layout.setSpacing(4)
 
         t_head_layout = QHBoxLayout()
+        t_head_layout.setSpacing(8)
         lbl_table = QLabel("作业执行记录")
         lbl_table.setStyleSheet("font-weight: bold; font-size: 11px; color: #475569;")
-        lbl_table.setStyleSheet("font-weight: bold; font-size: 11px; color: #475569;")
         t_head_layout.addWidget(lbl_table)
+
+        # 1. 实时全字段检索输入框
+        self.input_table_search = QLineEdit()
+        self.input_table_search.setPlaceholderText("🔍 快速检索 UID / 链接 / 密钥...")
+        self.input_table_search.setClearButtonEnabled(True)
+        self.input_table_search.setFixedWidth(210)
+        self.input_table_search.setStyleSheet("""
+            QLineEdit {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+            QLineEdit:focus { border-color: #2563EB; }
+        """)
+        self.input_table_search.textChanged.connect(self.on_table_search_changed)
+        t_head_layout.addWidget(self.input_table_search)
+
+        # 2. 状态筛选下拉框
+        self.combo_table_status = QComboBox()
+        self.combo_table_status.addItem("全部状态", "ALL")
+        self.combo_table_status.addItem("仅看成功 (SUCCESS)", "SUCCESS")
+        self.combo_table_status.addItem("仅看失败 (FAIL)", "FAIL")
+        self.combo_table_status.setFixedWidth(145)
+        self.combo_table_status.setStyleSheet("""
+            QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+            }
+        """)
+        self.combo_table_status.currentIndexChanged.connect(self.on_table_status_filter_changed)
+        t_head_layout.addWidget(self.combo_table_status)
+
         t_head_layout.addStretch()
 
         btn_export = QPushButton("导出 CSV")
@@ -1236,15 +1619,19 @@ class MainWindow(QMainWindow):
         t_head_layout.addWidget(btn_clear)
         t_layout.addLayout(t_head_layout)
 
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels([
-            "时间", "卡片 UID", "作业类型", "状态", "主控 Key 0", "SDM 签名 Key", "NDEF 数据 / 模板", "耗时", "详细说明"
-        ])
+        # 3. 高性能虚拟视口表格 (QTableView + ProxyModel)
+        self.table = QTableView()
+        self.table.setModel(self.proxy_model)
+        self.table.setSortingEnabled(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(False)
 
-        # Fine-tuned engineering column widths
+        # 细粒度工业列宽配置
         header.resizeSection(0, 135)  # 时间 (YYYY-MM-DD HH:MM:SS)
         header.resizeSection(1, 125)  # 卡片 UID (14 Hex)
         header.resizeSection(2, 75)   # 作业类型
@@ -1254,10 +1641,10 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(6, QHeaderView.Stretch)  # NDEF 数据 / 模板 (自适应填满)
         header.resizeSection(7, 65)   # 耗时
         header.resizeSection(8, 160)  # 详细说明
+
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet("""
-            QTableWidget {
+            QTableView {
                 border: 1px solid #E2E8F0;
                 background-color: #FFFFFF;
                 gridline-color: #F1F5F9;
@@ -1690,78 +2077,268 @@ class MainWindow(QMainWindow):
     def on_status_update(self, state: str, message: str):
         pass
 
-    def on_tag_processed(self, record: dict):
-        self.records.append(record)
+    # -------------------------------------------------------------
+    # 顶部菜单栏与全局快捷键 (Native Menu Bar & Hotkeys)
+    # -------------------------------------------------------------
+    def setup_menu_bar(self):
+        menubar = self.menuBar()
 
-        row_pos = self.table.rowCount()
-        self.table.insertRow(row_pos)
+        # 1. 文件 (File)
+        menu_file = menubar.addMenu("文件(&F)")
 
-        # 0: 时间
-        self.table.setItem(row_pos, 0, QTableWidgetItem(record.get("timestamp", "")))
+        act_new_recipe = QAction("新建配方(&N)", self)
+        act_new_recipe.setShortcut(QKeySequence.New)
+        act_new_recipe.triggered.connect(self.new_recipe)
+        menu_file.addAction(act_new_recipe)
 
-        # 1: UID (等宽字体)
-        item_uid = QTableWidgetItem(record.get("uid", ""))
-        item_uid.setFont(QFont("Menlo", 10))
-        item_uid.setToolTip(record.get("uid", ""))
-        self.table.setItem(row_pos, 1, item_uid)
+        act_import_recipe = QAction("导入配方...(&O)", self)
+        act_import_recipe.setShortcut(QKeySequence.Open)
+        act_import_recipe.triggered.connect(self.import_recipe_file)
+        menu_file.addAction(act_import_recipe)
 
-        # 2: 作业类型
-        self.table.setItem(row_pos, 2, QTableWidgetItem(record.get("operation", "")))
+        act_export_recipe = QAction("导出配方...(&S)", self)
+        act_export_recipe.setShortcut(QKeySequence.Save)
+        act_export_recipe.triggered.connect(self.export_recipe_file)
+        menu_file.addAction(act_export_recipe)
 
-        # 3: 状态 (带颜色)
-        item_status = QTableWidgetItem("成功" if record.get("status") == "SUCCESS" else "失败")
-        if record.get("status") == "SUCCESS":
-            item_status.setForeground(QColor("#166534"))
-            item_status.setFont(QFont("Arial", 9, QFont.Bold))
+        menu_file.addSeparator()
+
+        act_export_csv = QAction("导出作业清单 CSV...(&E)", self)
+        act_export_csv.setShortcut(QKeySequence("Ctrl+E"))
+        act_export_csv.triggered.connect(self.export_records)
+        menu_file.addAction(act_export_csv)
+
+        menu_file.addSeparator()
+
+        act_quit = QAction("退出程序(&Q)", self)
+        act_quit.setShortcut(QKeySequence.Quit)
+        act_quit.triggered.connect(self.close)
+        menu_file.addAction(act_quit)
+
+        # 2. 硬件与操作 (Hardware & Operation)
+        menu_hw = menubar.addMenu("硬件与操作(&H)")
+
+        act_refresh_reader = QAction("重新扫描物理读卡器(&R)", self)
+        act_refresh_reader.setShortcut(QKeySequence.Refresh)
+        act_refresh_reader.triggered.connect(self.on_refresh_reader_clicked)
+        menu_hw.addAction(act_refresh_reader)
+
+        menu_hw.addSeparator()
+
+        act_switch_mode = QAction("切换发卡模式 (单张/批量)(&M)", self)
+        act_switch_mode.setShortcut(QKeySequence("Ctrl+M"))
+        act_switch_mode.triggered.connect(self._toggle_mode_shortcut)
+        menu_hw.addAction(act_switch_mode)
+
+        # 3. 工具 (Tools)
+        menu_tools = menubar.addMenu("工具(&T)")
+
+        act_edit_recipe = QAction("调整当前配方参数...(&P)", self)
+        act_edit_recipe.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        act_edit_recipe.triggered.connect(self.open_recipe_edit_dialog)
+        menu_tools.addAction(act_edit_recipe)
+
+        menu_tools.addSeparator()
+
+        act_clear_log = QAction("清空通信与诊断日志(&L)", self)
+        act_clear_log.setShortcut(QKeySequence("Ctrl+K"))
+        act_clear_log.triggered.connect(lambda: self.txt_log.clear())
+        menu_tools.addAction(act_clear_log)
+
+        act_clear_records = QAction("清空作业明细记录(&C)", self)
+        act_clear_records.setShortcut(QKeySequence("Ctrl+Shift+Delete"))
+        act_clear_records.triggered.connect(self.clear_records)
+        menu_tools.addAction(act_clear_records)
+
+        # 4. 帮助 (Help)
+        menu_help = menubar.addMenu("帮助(&H)")
+
+        act_check_update = QAction("检查新版本...(&U)", self)
+        act_check_update.triggered.connect(lambda: self.check_for_updates(manual=True))
+        menu_help.addAction(act_check_update)
+
+        act_github = QAction("访问 GitHub 仓库源码", self)
+        act_github.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{APP_GITHUB_REPO}")))
+        menu_help.addAction(act_github)
+
+        menu_help.addSeparator()
+
+        act_about = QAction("关于 NTAG 424 DNA 发卡工具(&A)...", self)
+        act_about.triggered.connect(self.show_about_dialog)
+        menu_help.addAction(act_about)
+
+    def _toggle_mode_shortcut(self):
+        is_single = self.radio_mode_single.isChecked()
+        if is_single:
+            self.radio_mode_batch.setChecked(True)
         else:
-            item_status.setForeground(QColor("#DC2626"))
-            item_status.setFont(QFont("Arial", 9, QFont.Bold))
-        self.table.setItem(row_pos, 3, item_status)
+            self.radio_mode_single.setChecked(True)
+        self.on_work_mode_switched()
 
-        # 4: 主控 Key 0 (完整 32 位 Hex)
-        k0 = record.get("key0", "")
-        item_k0 = QTableWidgetItem(k0)
-        item_k0.setFont(QFont("Menlo", 9))
-        item_k0.setToolTip(k0)
-        self.table.setItem(row_pos, 4, item_k0)
+    def new_recipe(self):
+        if QMessageBox.question(self, "新建配方", "确定要基于系统默认模板创建全新配方吗？当前未导出的配置将被重置。", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            self.config = DEFAULT_CONFIG.copy()
+            self.config["recipe_name"] = generate_random_recipe_name()
+            save_config(self.config)
+            self.sync_worker_config()
+            self.update_recipe_banner()
+            self.append_log(f"[CONFIG] 已新建默认配方: {self.config.get('recipe_name', '')}")
+            self.open_recipe_edit_dialog()
 
-        # 5: SDM 签名 Key (完整 32 位 Hex)
-        km = record.get("key_mac", "") or record.get("key2_mac", "")
-        item_km = QTableWidgetItem(km)
-        item_km.setFont(QFont("Menlo", 9))
-        item_km.setToolTip(km)
-        self.table.setItem(row_pos, 5, item_km)
+    def import_recipe_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入配方文件 (JSON)",
+            "",
+            "JSON 配方文件 (*.json);;所有文件 (*.*)"
+        )
+        if not file_path:
+            return
 
-        # 6: NDEF 数据 / 模板
-        ndef_val = record.get("ndef_url", "")
-        item_ndef = QTableWidgetItem(ndef_val)
-        item_ndef.setToolTip(ndef_val)
-        self.table.setItem(row_pos, 6, item_ndef)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-        # 7: 耗时
-        self.table.setItem(row_pos, 7, QTableWidgetItem(f"{record.get('duration_ms', 0)} ms"))
+            if not isinstance(data, dict):
+                raise ValueError("文件内容必须是 JSON 对象")
 
-        # 8: 详细说明
-        det_val = record.get("details", "")
-        item_det = QTableWidgetItem(det_val)
-        item_det.setToolTip(det_val)
-        self.table.setItem(row_pos, 8, item_det)
+            if "config" in data and isinstance(data["config"], dict):
+                data = {**data, **data["config"]}
 
+            new_cfg = self.config.copy()
+            for k in DEFAULT_CONFIG.keys():
+                if k in data:
+                    new_cfg[k] = data[k]
+
+            if "system_salt" in data and "kdf_custom_salt" not in data:
+                new_cfg["kdf_custom_salt"] = data["system_salt"]
+
+            if "recipe_name" not in data:
+                new_cfg["recipe_name"] = os.path.splitext(os.path.basename(file_path))[0]
+
+            self.config = new_cfg
+            save_config(self.config)
+            self.sync_worker_config()
+            self.update_recipe_banner()
+            self.append_log(f"[CONFIG] 成功导入外部配方: {self.config.get('recipe_name', '')}")
+            QMessageBox.information(self, "导入成功", f"配方已成功加载并生效！\n配方名: {self.config.get('recipe_name', '')}")
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"无法解析配方文件:\n{e}")
+
+    def export_recipe_file(self):
+        recipe_name = self.config.get("recipe_name", "recipe")
+        default_filename = f"{recipe_name}_{datetime.now().strftime('%Y%m%d')}.json"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出当前配方 (JSON)",
+            default_filename,
+            "JSON 配方文件 (*.json);;所有文件 (*.*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            recipe_data = {
+                "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "version": APP_VERSION,
+                **self.config
+            }
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(recipe_data, f, indent=2, ensure_ascii=False)
+
+            self.append_log(f"[CONFIG] 配方已导出至: {file_path}")
+            QMessageBox.information(self, "导出成功", f"配方已成功导出至:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"无法写入配方文件:\n{e}")
+
+    # -------------------------------------------------------------
+    # 快捷键事件分发 (Space 发卡 / Esc 暂停)
+    # -------------------------------------------------------------
+    def keyPressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QSpinBox)):
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        # 空格键：单张模式下一键触发【发卡注入】
+        if key == Qt.Key_Space:
+            if self.radio_mode_single.isChecked() and self.btn_single_provision.isEnabled():
+                self.on_single_action_clicked("provision")
+                event.accept()
+                return
+
+        # Esc 键：批量流水线模式下一键暂停/恢复作业
+        elif key == Qt.Key_Escape:
+            if not self.radio_mode_single.isChecked():
+                self.toggle_batch_running()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+    # -------------------------------------------------------------
+    # 在线检查更新与关于
+    # -------------------------------------------------------------
+    def check_for_updates(self, manual: bool = True):
+        if self.update_checker_thread and self.update_checker_thread.isRunning():
+            return
+        self.update_checker_thread = UpdateCheckThread(self)
+        self.update_checker_thread.check_finished.connect(
+            lambda has_up, tag, url, body, err: self.on_update_check_finished(has_up, tag, url, body, err, manual)
+        )
+        self.update_checker_thread.start()
+        if manual:
+            self.statusBar().showMessage("正在检查更新...", 3000)
+
+    def on_update_check_finished(self, has_update: bool, latest_tag: str, release_url: str, release_notes: str, error_msg: str, manual: bool):
+        if error_msg:
+            if manual:
+                QMessageBox.warning(self, "检查更新失败", f"无法连接到 GitHub 检查最新版本:\n{error_msg}")
+            return
+
+        if has_update:
+            dlg = UpdateDialog(latest_tag, release_notes, release_url, self)
+            dlg.exec()
+        else:
+            if manual:
+                QMessageBox.information(self, "已是最新版本", f"当前版本 {APP_VERSION} 已是最新版本！无需更新。")
+
+    def show_about_dialog(self):
+        dlg = AboutDialog(self)
+        dlg.exec()
+
+    # -------------------------------------------------------------
+    # 虚拟表格过滤与检索回调
+    # -------------------------------------------------------------
+    def on_table_search_changed(self, text: str):
+        self.proxy_model.set_keyword(text)
+
+    def on_table_status_filter_changed(self, idx: int):
+        status = self.combo_table_status.currentData()
+        self.proxy_model.set_status_filter(status or "ALL")
+
+    # -------------------------------------------------------------
+    # 作业记录与导出 (基于虚拟数据模型)
+    # -------------------------------------------------------------
+    def on_tag_processed(self, record: dict):
+        self.table_model.add_record(record)
         self.table.scrollToBottom()
 
-        total = len(self.records)
-        succ = sum(1 for r in self.records if r.get("status") == "SUCCESS")
+        total = len(self.table_model._records)
+        succ = sum(1 for r in self.table_model._records if r.get("status") == "SUCCESS")
         fail = total - succ
         self.lbl_batch_stats.setText(f"已处理: {total} 张  |  成功: {succ}  |  失败: {fail}")
 
     def export_records(self):
-        if not self.records:
+        records = self.table_model.get_records()
+        if not records:
             QMessageBox.information(self, "提示", "当前没有可导出的作业记录。")
             return
         default_filename = f"records_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         path, _ = QFileDialog.getSaveFileName(self, "导出作业记录", default_filename, "CSV 文件 (*.csv)")
         if path:
-            if export_to_csv(self.records, path):
+            if export_to_csv(records, path):
                 self.append_log(f"[INFO] 记录已导出至: {path}")
                 QMessageBox.information(self, "导出成功", f"作业清单已导出至:\n{path}")
             else:
@@ -1769,8 +2346,7 @@ class MainWindow(QMainWindow):
 
     def clear_records(self):
         if QMessageBox.question(self, "清空确认", "确定清空当前作业明细记录吗？", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            self.records.clear()
-            self.table.setRowCount(0)
+            self.table_model.clear()
             self.lbl_batch_stats.setText("已处理: 0 张  |  成功: 0  |  失败: 0")
             self.append_log("[INFO] 已清空作业明细记录")
 
