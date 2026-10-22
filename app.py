@@ -1,5 +1,5 @@
 """
-NTAG 424 DNA 生产配置与发卡运维工具
+NTAG 424 DNA 标签发卡与运维工具 (ntag424-dna-provisioner)
 基于 PySide6 与 pyscard，支持 ACS ACR122U NFC 读写器。
 """
 
@@ -148,7 +148,7 @@ class RecipeSummaryDialog(QDialog):
 
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("发卡配方概览")
+        self.setWindowTitle("发卡配方详情")
         self.resize(560, 480)
         self.config = config
         self.request_edit = False
@@ -253,16 +253,16 @@ class RecipeSummaryDialog(QDialog):
             ("主密钥 (Master Key)", f"{master_mask} (16 字节)"),
             ("盐值策略 (Salt Source)", c.get("kdf_salt_source", "UID_STR")),
             ("自定义盐值", c.get("kdf_custom_salt", "(无)") if c.get("kdf_salt_source") == "CUSTOM" else "(绑定卡片 UID)"),
-            ("派生上下文 (Info)", c.get("kdf_info_pattern", "ntag424|{UID}|{SLOT}")),
+            ("派生上下文 (Info Context)", c.get("kdf_info_pattern", "ntag424|{UID}|{SLOT}")),
             ("SDM 签名槽位 (MAC Key)", f"Key {c.get('sdm_mac_key', 3)}"),
             ("密钥版本号 (Key Version)", str(c.get("key_version", 1))),
             ("NDEF 动态 URL 模板", url),
             ("Android AAR 记录", f"已启用 ({c.get('aar_package_name', '')})" if c.get("enable_aar") else "未启用"),
-            ("动态偏移量", offsets_str),
+            ("动态偏移与容量", offsets_str),
             ("File 01 (CC 文件)", f01_status),
             ("File 02 (NDEF & SDM)", f02_status),
             ("File 03 (私有扩展文件)", f03_status),
-            ("出厂比对密钥", c.get("factory_key", "00" * 16)),
+            ("出厂验证密钥 (Factory Key)", c.get("factory_key", "00" * 16)),
         ]
 
         self.table.setRowCount(len(items))
@@ -284,7 +284,7 @@ class RecipeEditDialog(QDialog):
 
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("调整发卡配方与规则")
+        self.setWindowTitle("发卡配方配置")
         self.resize(780, 580)
         self.setMinimumWidth(780)
         self.config = config.copy()
@@ -299,7 +299,7 @@ class RecipeEditDialog(QDialog):
         nc_layout = QHBoxLayout(name_card)
         nc_layout.setContentsMargins(10, 4, 10, 4)
 
-        lbl_r_name = QLabel("配方名称 (必填):")
+        lbl_r_name = QLabel("配方标识名称:")
         lbl_r_name.setStyleSheet("font-weight: bold; color: #1E293B; border: none;")
         nc_layout.addWidget(lbl_r_name)
 
@@ -339,7 +339,7 @@ class RecipeEditDialog(QDialog):
         grid_keys.setSpacing(8)
         grid_keys.setContentsMargins(12, 12, 12, 12)
 
-        grid_keys.addWidget(QLabel("系统主密钥 (Master Key 16B Hex):"), 0, 0)
+        grid_keys.addWidget(QLabel("系统主密钥 (Master Key):"), 0, 0)
         self.input_master_key = QLineEdit()
         self.input_master_key.setPlaceholderText("32 位十六进制密钥，例如 00112233445566778899AABBCCDDEEFF")
         grid_keys.addWidget(self.input_master_key, 0, 1)
@@ -357,7 +357,7 @@ class RecipeEditDialog(QDialog):
         self.combo_kdf.currentIndexChanged.connect(self.on_kdf_changed)
         grid_keys.addWidget(self.combo_kdf, 1, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("盐值来源 (Salt):"), 2, 0)
+        grid_keys.addWidget(QLabel("派生盐值来源 (Salt):"), 2, 0)
         self.combo_salt_src = QComboBox()
         self.combo_salt_src.addItem("卡片 UID 文本 (Hex-ASCII)", "UID_STR")
         self.combo_salt_src.addItem("卡片 UID 原始字节 (Binary)", "UID_BYTES")
@@ -366,21 +366,21 @@ class RecipeEditDialog(QDialog):
         self.combo_salt_src.currentIndexChanged.connect(self.on_salt_src_changed)
         grid_keys.addWidget(self.combo_salt_src, 2, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("自定义盐值内容:"), 3, 0)
+        grid_keys.addWidget(QLabel("自定义盐值 (Custom Salt):"), 3, 0)
         self.input_salt = QLineEdit()
         grid_keys.addWidget(self.input_salt, 3, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("派生上下文 (Info):"), 4, 0)
+        grid_keys.addWidget(QLabel("派生上下文 (Info Context):"), 4, 0)
         self.input_info_pattern = QLineEdit()
         self.input_info_pattern.setPlaceholderText("支持变量: {UID}, {SLOT}，例如 ntag424|{UID}|{SLOT}")
         grid_keys.addWidget(self.input_info_pattern, 4, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("SDM 签名密钥槽位:"), 5, 0)
+        grid_keys.addWidget(QLabel("SDM 签名密钥槽位 (MAC Key):"), 5, 0)
         self.combo_mac_key = QComboBox()
         populate_sdm_mac_combo(self.combo_mac_key, 3)
         grid_keys.addWidget(self.combo_mac_key, 5, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("密钥版本号 (Key Version 0~255):"), 6, 0)
+        grid_keys.addWidget(QLabel("密钥版本号 (Key Version):"), 6, 0)
         self.spin_key_ver = QSpinBox()
         self.spin_key_ver.setRange(0, 255)
         self.spin_key_ver.setValue(1)
@@ -405,7 +405,7 @@ class RecipeEditDialog(QDialog):
         aar_box.addWidget(self.input_aar_pkg, 1)
         grid_keys.addLayout(aar_box, 8, 1, 1, 2)
 
-        lbl_offset_title = QLabel("动态偏移量解析:")
+        lbl_offset_title = QLabel("动态偏移与容量解析:")
         lbl_offset_title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         grid_keys.addWidget(lbl_offset_title, 9, 0)
         self.lbl_offset_preview = QLabel("请输入包含 {UID}, {CTR}, {CMAC} 占位符的 URL 模板\n支持实时自动计算 File 02 偏移量与载荷用量")
@@ -423,7 +423,7 @@ class RecipeEditDialog(QDialog):
         """)
         grid_keys.addWidget(self.lbl_offset_preview, 9, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("出厂比对密钥:"), 10, 0)
+        grid_keys.addWidget(QLabel("出厂验证密钥 (Factory Key):"), 10, 0)
         self.input_factory_key = QLineEdit("00000000000000000000000000000000")
         grid_keys.addWidget(self.input_factory_key, 10, 1, 1, 2)
 
@@ -546,7 +546,7 @@ class RecipeEditDialog(QDialog):
         h_files_layout.addWidget(grp_f03)
         layout_files.addLayout(h_files_layout)
 
-        self.tabs.addTab(tab_files, "文件访问权限矩阵")
+        self.tabs.addTab(tab_files, "文件安全访问权限")
         layout.addWidget(self.tabs)
 
         # 3. Bottom Action Bar (Import/Export on Left, Cancel/Save on Right)
@@ -832,7 +832,7 @@ class RecipeEditDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NTAG 424 DNA 发卡与配置工具")
+        self.setWindowTitle("NTAG 424 DNA 标签发卡与运维工具")
         self.resize(1120, 880)
         self.setMinimumSize(980, 750)
 
@@ -884,7 +884,7 @@ class MainWindow(QMainWindow):
         h_layout.setContentsMargins(12, 6, 12, 6)
         h_layout.setSpacing(12)
 
-        title_label = QLabel("NTAG 424 DNA 发卡与配置工具")
+        title_label = QLabel("NTAG 424 DNA 标签发卡与运维工具")
         title_label.setFont(QFont("Arial", 14, QFont.Bold))
         title_label.setStyleSheet("color: #0F172A; border: none;")
         h_layout.addWidget(title_label)
@@ -906,7 +906,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(header_bar)
 
         # ---------------------------------------------------------
-        # 2. Main Navigation Tabs (平级: 发卡作业台 vs 读卡器与硬件)
+        # 2. Main Navigation Tabs (平级: 生产作业台 vs 硬件设备管理)
         # ---------------------------------------------------------
         self.main_tabs = QTabWidget()
         self.main_tabs.setStyleSheet("""
@@ -924,15 +924,15 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        # Tab 1: 发卡作业台 (默认工作主页)
+        # Tab 1: 生产作业台 (默认工作主页)
         tab_workstation = QWidget()
         self.setup_workstation_tab(tab_workstation)
-        self.main_tabs.addTab(tab_workstation, "发卡作业台")
+        self.main_tabs.addTab(tab_workstation, "生产作业台")
 
-        # Tab 2: 读卡器与硬件设置 (系统基础设施，与作业台平级)
+        # Tab 2: 硬件设备管理 (系统基础设施，与作业台平级)
         tab_hardware = QWidget()
         self.setup_hardware_tab(tab_hardware)
-        self.main_tabs.addTab(tab_hardware, "读卡器与硬件")
+        self.main_tabs.addTab(tab_hardware, "硬件设备管理")
 
         main_layout.addWidget(self.main_tabs)
 
@@ -1023,8 +1023,8 @@ class MainWindow(QMainWindow):
         mode_line.addWidget(lbl_mode_caption)
 
         self.group_work_mode = QButtonGroup(self)
-        self.radio_mode_single = QRadioButton("单卡模式 (手动执行)")
-        self.radio_mode_batch = QRadioButton("批量模式 (自动感应)")
+        self.radio_mode_single = QRadioButton("单卡调试模式")
+        self.radio_mode_batch = QRadioButton("批量自动模式")
         self.radio_mode_single.setChecked(True)
         self.radio_mode_single.setStyleSheet("font-weight: bold; color: #0F766E; border: none;")
         self.radio_mode_batch.setStyleSheet("font-weight: bold; color: #C2410C; border: none;")
@@ -1081,7 +1081,7 @@ class MainWindow(QMainWindow):
             }
         """
 
-        self.btn_single_provision = QPushButton("发卡写入")
+        self.btn_single_provision = QPushButton("发卡注入")
         self.btn_single_provision.setStyleSheet(btn_base_qss + "QPushButton:enabled { background-color: #2563EB; color: white; border: none; } QPushButton:enabled:hover { background-color: #1D4ED8; }")
         self.btn_single_provision.clicked.connect(lambda: self.on_single_action_clicked("provision"))
         self.btn_single_provision.setEnabled(False)
@@ -1132,7 +1132,7 @@ class MainWindow(QMainWindow):
         b_ctrl_row.addWidget(lbl_b_act)
 
         self.group_batch_action = QButtonGroup(self)
-        self.radio_batch_prov = QRadioButton("批量发卡写入")
+        self.radio_batch_prov = QRadioButton("批量发卡注入")
         self.radio_batch_rest = QRadioButton("批量恢复出厂")
         self.radio_batch_prov.setChecked(True)
         self.radio_batch_prov.setStyleSheet("font-weight: bold; color: #2563EB; border: none;")
@@ -1191,7 +1191,8 @@ class MainWindow(QMainWindow):
         t_layout.setSpacing(4)
 
         t_head_layout = QHBoxLayout()
-        lbl_table = QLabel("作业明细清单")
+        lbl_table = QLabel("作业执行记录")
+        lbl_table.setStyleSheet("font-weight: bold; font-size: 11px; color: #475569;")
         lbl_table.setStyleSheet("font-weight: bold; font-size: 11px; color: #475569;")
         t_head_layout.addWidget(lbl_table)
         t_head_layout.addStretch()
@@ -1549,7 +1550,7 @@ class MainWindow(QMainWindow):
         self.lbl_single_result.setStyleSheet("color: #1D4ED8; font-family: Menlo, Monaco, Consolas, monospace; font-size: 11px; background: #F8FAFC; padding: 8px 12px; border-radius: 4px; border: 1px solid #CBD5E1;")
 
     def on_single_action_finished(self, action: str, success: bool, msg: str, detail: dict):
-        self.btn_single_provision.setText("发卡写入")
+        self.btn_single_provision.setText("发卡注入")
         self.btn_single_restore.setText("恢复出厂")
         self.btn_single_inspect.setText("读取诊断")
 
@@ -1605,13 +1606,13 @@ class MainWindow(QMainWindow):
                 km = detail.get("derived_key2_mac", "")
                 sample = detail.get("read_sample", "")
                 self.lbl_single_result.setText(
-                    f"[发卡写入成功] UID: {uid_str} ({algo})\n"
+                    f"[发卡注入成功] UID: {uid_str} ({algo})\n"
                     f"Key 0: {k0} | Key {mac_no} (MAC): {km}\n"
                     f"回读校验: {sample}"
                 )
                 self.lbl_single_result.setStyleSheet("color: #15803D; font-family: Menlo, Monaco, Consolas, monospace; font-size: 11px; background: #F8FAFC; padding: 8px 12px; border-radius: 4px; border: 1px solid #CBD5E1;")
             else:
-                self.lbl_single_result.setText(f"[发卡写入失败] UID: {uid_str}\n原因: {msg}")
+                self.lbl_single_result.setText(f"[发卡注入失败] UID: {uid_str}\n原因: {msg}")
                 self.lbl_single_result.setStyleSheet("color: #B91C1C; font-family: Menlo, Monaco, Consolas, monospace; font-size: 11px; background: #F8FAFC; padding: 8px 12px; border-radius: 4px; border: 1px solid #CBD5E1;")
 
         elif action == "restore":
@@ -1635,7 +1636,7 @@ class MainWindow(QMainWindow):
         self.lbl_card_status.setText("<span style='color:#94A3B8;'>○</span> <span style='color:#64748B;'>待放置卡片</span>")
         self._update_single_buttons_state()
 
-        self.btn_single_provision.setText("发卡写入")
+        self.btn_single_provision.setText("发卡注入")
         self.btn_single_restore.setText("恢复出厂")
         self.btn_single_inspect.setText("读取诊断")
 

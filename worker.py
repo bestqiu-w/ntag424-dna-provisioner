@@ -83,14 +83,14 @@ class NFCWorker(QThread):
             if self.current_detected_uid:
                 self.status_update.emit("CARD_READY", f"已感应到卡片 [{self.current_detected_uid}]，请选择操作")
             else:
-                self.status_update.emit("WAITING_SINGLE", "单卡模式已就绪，等待放置卡片")
-            self.log_message.emit("[INFO] 切换至单卡模式 (手动执行)")
+                self.status_update.emit("WAITING_SINGLE", "单卡调试模式已就绪，等待放置卡片")
+            self.log_message.emit("[INFO] 切换至单卡调试模式")
         else:
             if self.batch_running:
                 self.status_update.emit("WAITING", f"【批量{self.batch_mode_desc()}】正在等待卡片贴近...")
             else:
                 self.status_update.emit("PAUSED", f"【批量{self.batch_mode_desc()}】处于暂停状态")
-            self.log_message.emit("[INFO] 切换至批量模式 (自动感应)")
+            self.log_message.emit("[INFO] 切换至批量自动模式")
 
     def batch_mode_desc(self) -> str:
         return "发卡注入" if self.batch_mode == "provision" else "恢复出厂"
@@ -232,13 +232,13 @@ class NFCWorker(QThread):
                     self.last_handled_uid = None
                     self.card_removed.emit()
                     if self.work_mode == "single":
-                        self.status_update.emit("WAITING_SINGLE", "单卡模式已就绪，等待放置卡片")
+                        self.status_update.emit("WAITING_SINGLE", "单卡调试模式已就绪，等待放置卡片")
                     elif self.batch_running:
                         self.status_update.emit("WAITING", f"【批量{self.batch_mode_desc()}】正在等待卡片贴近...")
 
                 # If user triggered single action while no card is on antenna:
                 if self.pending_single_action:
-                    act_name = {"provision": "发卡写入", "restore": "恢复出厂", "inspect": "读取诊断"}.get(self.pending_single_action, self.pending_single_action)
+                    act_name = {"provision": "发卡注入", "restore": "恢复出厂", "inspect": "读取诊断"}.get(self.pending_single_action, self.pending_single_action)
                     self.pending_single_action = None
                     self.single_action_finished.emit(act_name, False, "未检测到卡片，请将标签置于读卡区", {})
                     self.status_update.emit("ERROR", f"执行【{act_name}】失败: 未检测到卡片")
@@ -297,7 +297,7 @@ class NFCWorker(QThread):
         mgr = NTAG424Manager(self.reader.connection)
 
         action_names = {
-            "provision": "发卡写入",
+            "provision": "发卡注入",
             "restore": "恢复出厂",
             "inspect": "读取诊断",
         }
@@ -354,8 +354,8 @@ class NFCWorker(QThread):
                 aar_info = f", AAR: {aar_pkg}" if aar_pkg else ""
                 record["details"] = f"算法: {self.kdf_algo}, MAC槽位: Key {mac_k_no}{aar_info}"
 
-                self.status_update.emit("SUCCESS", f"写入成功! UID: {uid_hex} (耗时: {duration_ms}ms)")
-                self.log_message.emit(f"[SUCCESS] 发卡写入完成 [UID: {uid_hex}, 耗时: {duration_ms}ms]:")
+                self.status_update.emit("SUCCESS", f"注入成功! UID: {uid_hex} (耗时: {duration_ms}ms)")
+                self.log_message.emit(f"[SUCCESS] 发卡注入完成 [UID: {uid_hex}, 耗时: {duration_ms}ms]:")
                 self.log_message.emit(f"  • 算法与配置: {self.kdf_algo} / 签名槽位: Key {mac_k_no}")
                 self.log_message.emit(f"  • 主控 Key 0: {key0_full}")
                 self.log_message.emit(f"  • 签名 Key {mac_k_no} (MAC): {key_mac_full}")
@@ -366,8 +366,8 @@ class NFCWorker(QThread):
                     self.reader.trigger_success_feedback()
             else:
                 record["status"] = "ERROR"
-                self.status_update.emit("ERROR", f"写入失败: {msg}")
-                self.log_message.emit(f"[ERROR] 发卡写入失败: {msg}")
+                self.status_update.emit("ERROR", f"注入失败: {msg}")
+                self.log_message.emit(f"[ERROR] 发卡注入失败: {msg}")
                 if self.auto_buzzer:
                     self.reader.trigger_failure_feedback()
 
