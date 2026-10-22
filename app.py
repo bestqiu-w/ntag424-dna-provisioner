@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor, QTextCursor
+from PySide6.QtGui import QFont, QColor, QTextCursor, QIcon
 
 from utils.config import (
     DEFAULT_CONFIG,
@@ -835,6 +835,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("NTAG 424 DNA 标签发卡与运维工具")
         self.resize(1120, 880)
         self.setMinimumSize(980, 750)
+
+        # Set Window Icon
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(base_dir, "assets", "icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         self.config = load_config()
         if not self.config.get("recipe_name"):
@@ -1774,7 +1780,21 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Windows: Set explicit AppUserModelID to ensure taskbar icon displays correctly
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("bestqiu.ntag424.provisioner.1.0")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
+
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    icon_path = os.path.join(base_dir, "assets", "icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

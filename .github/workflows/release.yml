@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (e.g. v1.0.0)'
+        description: 'Release Tag (e.g. v1.0.1)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -25,12 +25,18 @@ jobs:
           - os: windows-latest
             platform_id: windows-x64
             archive_ext: zip
+            icon_file: assets/icon.ico
+            data_sep: ';'
           - os: macos-latest
             platform_id: macos-arm64
             archive_ext: zip
+            icon_file: assets/icon.icns
+            data_sep: ':'
           - os: ubuntu-latest
             platform_id: linux-x64
             archive_ext: tar.gz
+            icon_file: assets/icon.png
+            data_sep: ':'
 
     steps:
       - name: Checkout Code
@@ -58,6 +64,8 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed \
             --name "ntag424-dna-provisioner" \
+            --icon "${{ matrix.icon_file }}" \
+            --add-data "assets${{ matrix.data_sep }}assets" \
             --hidden-import "smartcard" \
             --hidden-import "smartcard.scard" \
             --hidden-import "smartcard.pcsc" \
@@ -74,6 +82,7 @@ jobs:
             New-Item -ItemType Directory -Force -Path $distDir
             Move-Item "dist/ntag424-dna-provisioner.exe" $distDir
           }
+          Copy-Item -Recurse -Force "assets" $distDir
           Copy-Item -Recurse -Force "recipes" $distDir
           Copy-Item -Force "README.md" $distDir
           Compress-Archive -Path "$distDir/*" -DestinationPath "ntag424-dna-provisioner-${{ matrix.platform_id }}.zip"
@@ -88,6 +97,7 @@ jobs:
           elif [ -d "dist/ntag424-dna-provisioner" ]; then
             cp -R dist/ntag424-dna-provisioner dist/package/
           fi
+          cp -R assets dist/package/
           cp -R recipes dist/package/
           cp README.md dist/package/
           cd dist/package && zip -r ../../ntag424-dna-provisioner-${{ matrix.platform_id }}.zip .
@@ -98,6 +108,7 @@ jobs:
         run: |
           mkdir -p dist/package
           cp -R dist/ntag424-dna-provisioner dist/package/
+          cp -R assets dist/package/
           cp -R recipes dist/package/
           cp README.md dist/package/
           tar -czvf ntag424-dna-provisioner-${{ matrix.platform_id }}.tar.gz -C dist/package .
@@ -117,7 +128,7 @@ jobs:
           elif [[ -n "${{ inputs.release_tag }}" ]]; then
             echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
+            echo "tag=v1.0.1" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish to GitHub Releases
