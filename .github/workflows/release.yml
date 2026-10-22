@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (e.g. v1.0.1)'
+        description: 'Release Tag (e.g. v1.0.2)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.0.2'
 
 permissions:
   contents: write
@@ -59,7 +59,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build Executable with PyInstaller
+      - name: Build Executable with PyInstaller (Slim & Optimized)
         shell: bash
         run: |
           pyinstaller --noconfirm --clean --windowed \
@@ -71,6 +71,24 @@ jobs:
             --hidden-import "smartcard.pcsc" \
             --hidden-import "smartcard.System" \
             --hidden-import "cryptography" \
+            --exclude-module "PySide6.QtWebEngineCore" \
+            --exclude-module "PySide6.QtWebEngineWidgets" \
+            --exclude-module "PySide6.QtWebEngineQuick" \
+            --exclude-module "PySide6.QtPdf" \
+            --exclude-module "PySide6.QtPdfWidgets" \
+            --exclude-module "PySide6.QtQml" \
+            --exclude-module "PySide6.QtQuick" \
+            --exclude-module "PySide6.QtQuick3D" \
+            --exclude-module "PySide6.Qt3DCore" \
+            --exclude-module "PySide6.Qt3DRender" \
+            --exclude-module "PySide6.QtMultimedia" \
+            --exclude-module "PySide6.QtMultimediaWidgets" \
+            --exclude-module "PySide6.QtBluetooth" \
+            --exclude-module "PySide6.QtSensors" \
+            --exclude-module "PySide6.QtPositioning" \
+            --exclude-module "PySide6.QtDesigner" \
+            --exclude-module "tkinter" \
+            --exclude-module "unittest" \
             app.py
 
       - name: Package Artifacts (Windows)
@@ -85,7 +103,7 @@ jobs:
           Copy-Item -Recurse -Force "assets" $distDir
           Copy-Item -Recurse -Force "recipes" $distDir
           Copy-Item -Force "README.md" $distDir
-          Compress-Archive -Path "$distDir/*" -DestinationPath "ntag424-dna-provisioner-${{ matrix.platform_id }}.zip"
+          Compress-Archive -Path "$distDir/*" -DestinationPath "ntag424-dna-provisioner-${{ matrix.platform_id }}.zip" -CompressionLevel Optimal
 
       - name: Package Artifacts (macOS)
         if: runner.os == 'macOS'
@@ -100,7 +118,7 @@ jobs:
           cp -R assets dist/package/
           cp -R recipes dist/package/
           cp README.md dist/package/
-          cd dist/package && zip -r ../../ntag424-dna-provisioner-${{ matrix.platform_id }}.zip .
+          cd dist/package && zip -r -9 ../../ntag424-dna-provisioner-${{ matrix.platform_id }}.zip .
 
       - name: Package Artifacts (Linux)
         if: runner.os == 'Linux'
@@ -128,7 +146,7 @@ jobs:
           elif [[ -n "${{ inputs.release_tag }}" ]]; then
             echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=v1.0.1" >> $GITHUB_OUTPUT
+            echo "tag=v1.0.2" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish to GitHub Releases
