@@ -1,5 +1,5 @@
 """
-NTAG 424 DNA 标签发卡与运维工具 (ntag424-dna-provisioner)
+NTAG424 Pro - NTAG 424 DNA 标签发卡与运维工具 (ntag424-pro)
 基于 PySide6 与 pyscard，支持 ACS ACR122U NFC 读写器。
 """
 
@@ -1276,7 +1276,7 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
 APP_VERSION = "v1.0.3"
-APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
+APP_GITHUB_REPO = "bestqiu-w/ntag424-pro"
 
 
 class UpdateCheckThread(QThread):
@@ -1288,7 +1288,7 @@ class UpdateCheckThread(QThread):
         import json
         url = f"https://api.github.com/repos/{APP_GITHUB_REPO}/releases/latest"
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "NTAG424-Provisioner-App"})
+            req = urllib.request.Request(url, headers={"User-Agent": "NTAG424-Pro-App"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode())

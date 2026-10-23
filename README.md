@@ -1,4 +1,4 @@
-# NTAG 424 DNA 标签发卡与运维工具 (ntag424-dna-provisioner)
+# NTAG424 Pro - NTAG 424 DNA 标签发卡与运维工具 (ntag424-pro)
 
 基于 Python 3 + PySide6 开发的专业级跨平台桌面发卡与运维工具，专用于配合 **ACS ACR122U** 读写器，为巡检、防伪及资产数字化场景下的 **NTAG 424 DNA** 标签提供**单卡调试与只读诊断**、**批量发卡注入（Provisioning）**与**一键恢复出厂初始化（Factory Reset）**。
 
@@ -100,5 +100,5 @@ python app.py
 ---
 
 ## 四、 GitHub 仓库
-* 仓库主页：[https://github.com/bestqiu-w/ntag424-dna-provisioner](https://github.com/bestqiu-w/ntag424-dna-provisioner)
+* 仓库主页：[https://github.com/bestqiu-w/ntag424-pro](https://github.com/bestqiu-w/ntag424-pro)
 * License: MIT

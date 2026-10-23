@@ -1,5 +1,5 @@
 """
-Generates high-resolution application icons for NTAG 424 DNA Provisioner.
+Generates high-resolution application icons for NTAG424 Pro.
 Outputs:
 - assets/icon.png (512x512)
 - assets/icon.ico (Windows multi-res ICO)

@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --clean --windowed \
-            --name "ntag424-dna-provisioner" \
+            --name "NTAG424-Pro" \
             --icon "${{ matrix.icon_file }}" \
             --add-data "assets${{ matrix.data_sep }}assets" \
             --hidden-import "smartcard" \
@@ -95,42 +95,42 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $distDir = "dist/ntag424-dna-provisioner"
-          if (Test-Path "dist/ntag424-dna-provisioner.exe") {
+          $distDir = "dist/NTAG424-Pro"
+          if (Test-Path "dist/NTAG424-Pro.exe") {
             New-Item -ItemType Directory -Force -Path $distDir
-            Move-Item "dist/ntag424-dna-provisioner.exe" $distDir
+            Move-Item "dist/NTAG424-Pro.exe" $distDir
           }
           Copy-Item -Recurse -Force "assets" $distDir
           Copy-Item -Recurse -Force "recipes" $distDir
           Copy-Item -Force "README.md" $distDir
-          Compress-Archive -Path "$distDir/*" -DestinationPath "ntag424-dna-provisioner-${{ matrix.platform_id }}.zip" -CompressionLevel Optimal
+          Compress-Archive -Path "$distDir/*" -DestinationPath "NTAG424-Pro-${{ matrix.platform_id }}.zip" -CompressionLevel Optimal
 
       - name: Package Artifacts (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p dist/package
-          if [ -d "dist/ntag424-dna-provisioner.app" ]; then
-            cp -R dist/ntag424-dna-provisioner.app dist/package/
-          elif [ -d "dist/ntag424-dna-provisioner" ]; then
-            cp -R dist/ntag424-dna-provisioner dist/package/
+          if [ -d "dist/NTAG424-Pro.app" ]; then
+            cp -R dist/NTAG424-Pro.app dist/package/
+          elif [ -d "dist/NTAG424-Pro" ]; then
+            cp -R dist/NTAG424-Pro dist/package/
           fi
           cp -R assets dist/package/
           cp -R recipes dist/package/
           cp README.md dist/package/
-          cd dist/package && zip -r -9 ../../ntag424-dna-provisioner-${{ matrix.platform_id }}.zip .
+          cd dist/package && zip -r -9 ../../NTAG424-Pro-${{ matrix.platform_id }}.zip .
           cd ../..
 
           # Build native macOS DMG with Applications symlink
-          if [ -d "dist/ntag424-dna-provisioner.app" ]; then
+          if [ -d "dist/NTAG424-Pro.app" ]; then
             mkdir -p dist/dmg_root
-            cp -R dist/ntag424-dna-provisioner.app dist/dmg_root/
+            cp -R dist/NTAG424-Pro.app dist/dmg_root/
             ln -s /Applications dist/dmg_root/Applications
             cp README.md dist/dmg_root/
             hdiutil create -volname "NTAG424 Pro" \
               -srcfolder dist/dmg_root \
               -ov -format UDZO \
-              ntag424-dna-provisioner-${{ matrix.platform_id }}.dmg
+              NTAG424-Pro-${{ matrix.platform_id }}.dmg
           fi
 
       - name: Package Artifacts (Linux)
@@ -138,18 +138,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/package
-          cp -R dist/ntag424-dna-provisioner dist/package/
+          cp -R dist/NTAG424-Pro dist/package/
           cp -R assets dist/package/
           cp -R recipes dist/package/
           cp README.md dist/package/
-          tar -czvf ntag424-dna-provisioner-${{ matrix.platform_id }}.tar.gz -C dist/package .
+          tar -czvf NTAG424-Pro-${{ matrix.platform_id }}.tar.gz -C dist/package .
 
       - name: Upload Build Artifact to Actions
         uses: actions/upload-artifact@v4
         with:
-          name: ntag424-dna-provisioner-${{ matrix.platform_id }}
+          name: NTAG424-Pro-${{ matrix.platform_id }}
           path: |
-            ntag424-dna-provisioner-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
+            NTAG424-Pro-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
             *.dmg
           if-no-files-found: warn
 
@@ -169,12 +169,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag_name.outputs.tag }}
-          name: Release ${{ steps.tag_name.outputs.tag }}
+          name: NTAG424 Pro ${{ steps.tag_name.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
           files: |
-            ntag424-dna-provisioner-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
+            NTAG424-Pro-${{ matrix.platform_id }}.${{ matrix.archive_ext }}
             *.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
