@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
     QHeaderView,
     QFileDialog,
     QMessageBox,
@@ -38,8 +40,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QStackedWidget,
     QSizePolicy,
-    QMenuBar,
-    QMenu,
 )
 from PySide6.QtCore import (
     Qt,
@@ -49,15 +49,18 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     QModelIndex,
     QUrl,
+    QPointF,
 )
 from PySide6.QtGui import (
     QFont,
     QColor,
-    QTextCursor,
     QIcon,
     QAction,
     QKeySequence,
     QDesktopServices,
+    QPen,
+    QPixmap,
+    QPainter,
 )
 
 from utils.config import (
@@ -69,7 +72,6 @@ from utils.config import (
 )
 from utils.exporter import export_to_csv
 from core.sdm_builder import build_sdm_ndef
-from core.kdf import derive_key_configurable
 from worker import NFCWorker
 
 
@@ -185,6 +187,8 @@ class RecipeSummaryDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setStyleSheet("""
             QTableWidget {
@@ -272,7 +276,6 @@ class RecipeSummaryDialog(QDialog):
             ("自定义盐值", c.get("kdf_custom_salt", "(无)") if c.get("kdf_salt_source") == "CUSTOM" else "(绑定卡片 UID)"),
             ("派生上下文 (Info Context)", c.get("kdf_info_pattern", "ntag424|{UID}|{SLOT}")),
             ("SDM 签名槽位 (MAC Key)", f"Key {c.get('sdm_mac_key', 3)}"),
-            ("密钥版本号 (Key Version)", str(c.get("key_version", 1))),
             ("NDEF 动态 URL 模板", url),
             ("Android AAR 记录", f"已启用 ({c.get('aar_package_name', '')})" if c.get("enable_aar") else "未启用"),
             ("动态偏移与容量", offsets_str),
@@ -302,8 +305,8 @@ class RecipeEditDialog(QDialog):
     def __init__(self, config: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.setWindowTitle("发卡配方配置")
-        self.resize(780, 580)
-        self.setMinimumWidth(780)
+        self.resize(800, 610)
+        self.setMinimumWidth(800)
         self.config = config.copy()
 
         layout = QVBoxLayout(self)
@@ -312,12 +315,13 @@ class RecipeEditDialog(QDialog):
 
         # 1. Recipe Name (Required)
         name_card = QFrame()
-        name_card.setStyleSheet("QFrame { background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 4px; }")
+        name_card.setStyleSheet("QFrame { background-color: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; }")
         nc_layout = QHBoxLayout(name_card)
-        nc_layout.setContentsMargins(10, 4, 10, 4)
+        nc_layout.setContentsMargins(12, 8, 12, 8)
+        nc_layout.setSpacing(10)
 
         lbl_r_name = QLabel("配方标识名称:")
-        lbl_r_name.setStyleSheet("font-weight: bold; color: #1E293B; border: none;")
+        lbl_r_name.setStyleSheet("font-size: 13px; font-weight: bold; color: #0F172A; border: none;")
         nc_layout.addWidget(lbl_r_name)
 
         self.input_recipe_name = QLineEdit()
@@ -326,28 +330,127 @@ class RecipeEditDialog(QDialog):
         if not recipe_n:
             recipe_n = generate_random_recipe_name()
         self.input_recipe_name.setText(recipe_n)
+        self.input_recipe_name.setStyleSheet("background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: #0F172A; font-weight: 500;")
         nc_layout.addWidget(self.input_recipe_name)
 
         btn_rand_name = QPushButton("随机生成")
-        btn_rand_name.setStyleSheet("background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        btn_rand_name.setStyleSheet("background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: 500;")
         btn_rand_name.clicked.connect(lambda: self.input_recipe_name.setText(generate_random_recipe_name()))
         nc_layout.addWidget(btn_rand_name)
         layout.addWidget(name_card)
 
         # 2. Main Tabs (Keys & SDM vs File Matrix)
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        chevron_path = ensure_chevron_icon(base_dir)
+        check_path = ensure_check_icon(base_dir)
+
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabBar::tab {
+        self.tabs.setStyleSheet(f"""
+            QTabBar::tab {{
+                font-size: 13px;
                 font-weight: bold;
-                padding: 6px 16px;
+                padding: 7px 22px;
                 min-width: 140px;
-                color: #475569;
-            }
-            QTabBar::tab:selected {
+                color: #334155;
+            }}
+            QTabBar::tab:selected {{
                 background: #FFFFFF;
                 border-bottom: 2px solid #2563EB;
-                color: #2563EB;
-            }
+                color: #1D4ED8;
+            }}
+            QCheckBox {{
+                font-size: 12px;
+                font-weight: 500;
+                color: #0F172A;
+                spacing: 7px;
+            }}
+            QCheckBox::indicator {{
+                width: 15px;
+                height: 15px;
+                border: 1px solid #94A3B8;
+                border-radius: 3px;
+                background-color: #FFFFFF;
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: #2563EB;
+            }}
+            QCheckBox::indicator:checked {{
+                border-color: #2563EB;
+                background-color: #2563EB;
+                image: url({check_path});
+            }}
+            QCheckBox::indicator:disabled {{
+                border-color: #CBD5E1;
+                background-color: #F1F5F9;
+            }}
+            QCheckBox:disabled {{
+                color: #94A3B8;
+            }}
+            QComboBox {{
+                background-color: #FFFFFF;
+                color: #0F172A;
+                border: 1px solid #94A3B8;
+                border-radius: 4px;
+                padding: 3px 24px 3px 8px;
+                font-size: 12px;
+                min-height: 24px;
+            }}
+            QComboBox:hover {{
+                border-color: #2563EB;
+            }}
+            QComboBox:focus {{
+                border: 1.5px solid #2563EB;
+            }}
+            QComboBox:disabled {{
+                background-color: #F8FAFC;
+                color: #94A3B8;
+                border-color: #CBD5E1;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left: none;
+            }}
+            QComboBox::down-arrow {{
+                image: url({chevron_path});
+                width: 9px;
+                height: 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: #FFFFFF;
+                color: #0F172A;
+                border: 1px solid #94A3B8;
+                border-radius: 4px;
+                padding: 3px;
+                selection-background-color: #EFF6FF;
+                selection-color: #1D4ED8;
+            }}
+            QLineEdit, QSpinBox {{
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 12px;
+                color: #0F172A;
+                min-height: 24px;
+            }}
+            QLineEdit:focus, QSpinBox:focus {{
+                border-color: #2563EB;
+            }}
+            QLineEdit:disabled, QSpinBox:disabled {{
+                background-color: #F1F5F9;
+                border: 1px solid #CBD5E1;
+                color: #94A3B8;
+            }}
+            QLabel {{
+                font-size: 12px;
+                font-weight: 500;
+                color: #0F172A;
+            }}
+            QLabel:disabled {{
+                color: #94A3B8;
+            }}
         """)
 
         # Sub-tab 1: 密钥与 SDM 规则
@@ -362,6 +465,7 @@ class RecipeEditDialog(QDialog):
         grid_keys.addWidget(self.input_master_key, 0, 1)
 
         btn_rand_key = QPushButton("随机密钥")
+        btn_rand_key.setStyleSheet("background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: 500;")
         btn_rand_key.clicked.connect(lambda: self.input_master_key.setText(generate_random_key()))
         grid_keys.addWidget(btn_rand_key, 0, 2)
 
@@ -374,7 +478,8 @@ class RecipeEditDialog(QDialog):
         self.combo_kdf.currentIndexChanged.connect(self.on_kdf_changed)
         grid_keys.addWidget(self.combo_kdf, 1, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("派生盐值来源 (Salt):"), 2, 0)
+        self.lbl_salt_src = QLabel("派生盐值来源 (Salt):")
+        grid_keys.addWidget(self.lbl_salt_src, 2, 0)
         self.combo_salt_src = QComboBox()
         self.combo_salt_src.addItem("卡片 UID 文本 (Hex-ASCII)", "UID_STR")
         self.combo_salt_src.addItem("卡片 UID 原始字节 (Binary)", "UID_BYTES")
@@ -383,11 +488,13 @@ class RecipeEditDialog(QDialog):
         self.combo_salt_src.currentIndexChanged.connect(self.on_salt_src_changed)
         grid_keys.addWidget(self.combo_salt_src, 2, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("自定义盐值 (Custom Salt):"), 3, 0)
+        self.lbl_custom_salt = QLabel("自定义盐值 (Custom Salt):")
+        grid_keys.addWidget(self.lbl_custom_salt, 3, 0)
         self.input_salt = QLineEdit()
         grid_keys.addWidget(self.input_salt, 3, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("派生上下文 (Info Context):"), 4, 0)
+        self.lbl_info_pattern = QLabel("派生上下文 (Info Context):")
+        grid_keys.addWidget(self.lbl_info_pattern, 4, 0)
         self.input_info_pattern = QLineEdit()
         self.input_info_pattern.setPlaceholderText("支持变量: {UID}, {SLOT}，例如 ntag424|{UID}|{SLOT}")
         grid_keys.addWidget(self.input_info_pattern, 4, 1, 1, 2)
@@ -397,21 +504,15 @@ class RecipeEditDialog(QDialog):
         populate_sdm_mac_combo(self.combo_mac_key, 3)
         grid_keys.addWidget(self.combo_mac_key, 5, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("密钥版本号 (Key Version):"), 6, 0)
-        self.spin_key_ver = QSpinBox()
-        self.spin_key_ver.setRange(0, 255)
-        self.spin_key_ver.setValue(1)
-        grid_keys.addWidget(self.spin_key_ver, 6, 1, 1, 2)
-
-        grid_keys.addWidget(QLabel("NDEF 动态 URL 模板:"), 7, 0)
+        grid_keys.addWidget(QLabel("NDEF 动态 URL 模板:"), 6, 0)
         self.input_url = QLineEdit()
         self.input_url.setPlaceholderText("https://example.com/v?u={UID}&c={CTR}&m={CMAC}")
         self.input_url.textChanged.connect(self.update_offset_preview)
-        grid_keys.addWidget(self.input_url, 7, 1, 1, 2)
+        grid_keys.addWidget(self.input_url, 6, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("Android AAR 记录:"), 8, 0)
+        grid_keys.addWidget(QLabel("Android AAR 记录:"), 7, 0)
         aar_box = QHBoxLayout()
-        aar_box.setSpacing(8)
+        aar_box.setSpacing(20)
         self.chk_enable_aar = QCheckBox("追加 AAR")
         self.chk_enable_aar.stateChanged.connect(self.on_aar_toggle)
         aar_box.addWidget(self.chk_enable_aar)
@@ -420,11 +521,11 @@ class RecipeEditDialog(QDialog):
         self.input_aar_pkg.setPlaceholderText("例如 com.example.patrol")
         self.input_aar_pkg.textChanged.connect(self.update_offset_preview)
         aar_box.addWidget(self.input_aar_pkg, 1)
-        grid_keys.addLayout(aar_box, 8, 1, 1, 2)
+        grid_keys.addLayout(aar_box, 7, 1, 1, 2)
 
         lbl_offset_title = QLabel("动态偏移与容量解析:")
         lbl_offset_title.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        grid_keys.addWidget(lbl_offset_title, 9, 0)
+        grid_keys.addWidget(lbl_offset_title, 8, 0)
         self.lbl_offset_preview = QLabel("请输入包含 {UID}, {CTR}, {CMAC} 占位符的 URL 模板\n支持实时自动计算 File 02 偏移量与载荷用量")
         self.lbl_offset_preview.setFixedHeight(50)
         self.lbl_offset_preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -438,129 +539,235 @@ class RecipeEditDialog(QDialog):
             border-radius: 6px;
             padding: 5px 10px;
         """)
-        grid_keys.addWidget(self.lbl_offset_preview, 9, 1, 1, 2)
+        grid_keys.addWidget(self.lbl_offset_preview, 8, 1, 1, 2)
 
-        grid_keys.addWidget(QLabel("出厂验证密钥 (Factory Key):"), 10, 0)
+        grid_keys.addWidget(QLabel("出厂验证密钥 (Factory Key):"), 9, 0)
         self.input_factory_key = QLineEdit("00000000000000000000000000000000")
-        grid_keys.addWidget(self.input_factory_key, 10, 1, 1, 2)
+        grid_keys.addWidget(self.input_factory_key, 9, 1, 1, 2)
 
         self.tabs.addTab(tab_keys, "密钥派生与 SDM 规则")
 
-        # Sub-tab 2: 文件访问权限矩阵
+        # Sub-tab 2: 文件访问权限矩阵 (规范一体化卡片架构，与整体 UI 框架大风格完全统一)
         tab_files = QWidget()
         layout_files = QVBoxLayout(tab_files)
-        layout_files.setSpacing(8)
+        layout_files.setSpacing(10)
         layout_files.setContentsMargins(10, 10, 10, 10)
 
-        # File 02 (NDEF & SDM)
-        grp_f02 = QGroupBox("File 02 (NDEF 交互文件 - 256 字节)")
-        grp_f02.setStyleSheet("QGroupBox { border: 1px solid #CBD5E1; border-radius: 6px; margin-top: 6px; padding-top: 8px; font-weight: bold; }")
-        grid_f02 = QGridLayout(grp_f02)
-        grid_f02.setSpacing(6)
+        def _make_unified_card(title: str, subtitle: str = "", is_subcard: bool = False):
+            card = QFrame()
+            if is_subcard:
+                card.setStyleSheet("""
+                    QFrame#sub_card {
+                        background-color: #F8FAFC;
+                        border: 1px solid #E2E8F0;
+                        border-radius: 6px;
+                    }
+                """)
+                card.setObjectName("sub_card")
+            else:
+                card.setStyleSheet("""
+                    QFrame#main_card {
+                        background-color: #FFFFFF;
+                        border: 1px solid #CBD5E1;
+                        border-radius: 6px;
+                    }
+                """)
+                card.setObjectName("main_card")
 
-        grid_f02.addWidget(QLabel("通信模式 (CommMode):"), 0, 0)
+            card_l = QVBoxLayout(card)
+            card_l.setContentsMargins(0, 0, 0, 0)
+            card_l.setSpacing(0)
+
+            # 一体化标题行 (无突兀双色块，强化标题与副标字号色深)
+            t_box = QHBoxLayout()
+            if is_subcard:
+                t_box.setContentsMargins(12, 8, 12, 6)
+            else:
+                t_box.setContentsMargins(14, 10, 14, 7)
+            t_box.setSpacing(8)
+
+            lbl_t = QLabel(title)
+            if is_subcard:
+                lbl_t.setStyleSheet("font-size: 12px; font-weight: bold; color: #0F172A; border: none; background: transparent;")
+            else:
+                lbl_t.setStyleSheet("font-size: 13px; font-weight: bold; color: #0F172A; border: none; background: transparent;")
+            t_box.addWidget(lbl_t)
+
+            if subtitle:
+                lbl_s = QLabel(subtitle)
+                lbl_s.setStyleSheet("font-size: 12px; color: #475569; font-weight: 500; border: none; background: transparent;")
+                t_box.addWidget(lbl_s)
+
+            t_box.addStretch()
+            card_l.addLayout(t_box)
+
+            # 1px 细分割线：清晰分隔标题与下方配置内容，杜绝内容紧塞挤靠
+            div = QFrame()
+            div.setFrameShape(QFrame.HLine)
+            div.setStyleSheet("color: #E2E8F0; margin: 0px 8px;")
+            card_l.addWidget(div)
+
+            # 内容主体区 (使用对象选择器，避免 border: none 污染并清空内部下拉框边框)
+            body = QWidget()
+            body.setObjectName("card_body")
+            body.setStyleSheet("QWidget#card_body { background: transparent; border: none; }")
+            body_l = QVBoxLayout(body)
+            if is_subcard:
+                body_l.setContentsMargins(12, 9, 12, 9)
+            else:
+                body_l.setContentsMargins(14, 11, 14, 11)
+            body_l.setSpacing(8)
+            card_l.addWidget(body)
+
+            return card, body_l
+
+        # 1. File 02 (NDEF 交互文件，包含基础权限与专属 SDM 动态特性)
+        card_f02, body_f02 = _make_unified_card("File 02 (NDEF 交互文件)", "(256 字节 / 动态防伪)")
+
+        # File 02 基础安全访问权限
+        grid_f02_std = QGridLayout()
+        grid_f02_std.setSpacing(8)
+
+        grid_f02_std.addWidget(QLabel("通信模式 (CommMode):"), 0, 0)
         self.combo_f02_comm = QComboBox()
         populate_comm_mode_combo(self.combo_f02_comm, "0x00")
-        grid_f02.addWidget(self.combo_f02_comm, 0, 1)
+        grid_f02_std.addWidget(self.combo_f02_comm, 0, 1)
 
-        grid_f02.addWidget(QLabel("读权限 (Read Perm):"), 0, 2)
+        grid_f02_std.addWidget(QLabel("读权限 (Read Perm):"), 0, 2)
         self.combo_f02_read = QComboBox()
         populate_access_rights_combo(self.combo_f02_read, "0xE")
-        grid_f02.addWidget(self.combo_f02_read, 0, 3)
+        grid_f02_std.addWidget(self.combo_f02_read, 0, 3)
 
-        grid_f02.addWidget(QLabel("写权限 (Write Perm):"), 1, 0)
+        grid_f02_std.addWidget(QLabel("写权限 (Write Perm):"), 1, 0)
         self.combo_f02_write = QComboBox()
         populate_access_rights_combo(self.combo_f02_write, "0x0")
-        grid_f02.addWidget(self.combo_f02_write, 1, 1)
+        grid_f02_std.addWidget(self.combo_f02_write, 1, 1)
 
-        grid_f02.addWidget(QLabel("修改权限 (Change Perm):"), 1, 2)
+        grid_f02_std.addWidget(QLabel("修改权限 (Change Perm):"), 1, 2)
         self.combo_f02_change = QComboBox()
         populate_access_rights_combo(self.combo_f02_change, "0x0")
-        grid_f02.addWidget(self.combo_f02_change, 1, 3)
+        grid_f02_std.addWidget(self.combo_f02_change, 1, 3)
 
-        f02_cb_layout = QHBoxLayout()
+        body_f02.addLayout(grid_f02_std)
+
+        # File 02 专有特性：SDM 动态特性子卡片 (明确归属 File 02，拥有清晰标题区与分割线)
+        card_sdm, body_sdm = _make_unified_card("SDM 动态安全特性 (Secure Dynamic Messaging / SUN)", "(动态签名 / 鉴权)", is_subcard=True)
+
         self.chk_f02_sdm = QCheckBox("启用 SDM 动态签名 (SUN)")
         self.chk_f02_sdm.setChecked(True)
-        self.chk_uid_mirror = QCheckBox("镜像 UID")
-        self.chk_uid_mirror.setChecked(True)
-        self.chk_ctr_mirror = QCheckBox("镜像计数器")
-        self.chk_ctr_mirror.setChecked(True)
-        f02_cb_layout.addWidget(self.chk_f02_sdm)
-        f02_cb_layout.addWidget(self.chk_uid_mirror)
-        f02_cb_layout.addWidget(self.chk_ctr_mirror)
-        f02_cb_layout.addStretch()
-        grid_f02.addLayout(f02_cb_layout, 2, 0, 1, 4)
+        self.chk_f02_sdm.setStyleSheet("font-size: 12px; font-weight: bold; color: #0F172A;")
+        body_sdm.addWidget(self.chk_f02_sdm)
 
-        grid_f02.addWidget(QLabel("元数据加密 (MetaRead):"), 3, 0)
+        self.widget_sdm_sub = QWidget()
+        l_sdm_sub = QVBoxLayout(self.widget_sdm_sub)
+        l_sdm_sub.setContentsMargins(18, 0, 0, 0)
+        l_sdm_sub.setSpacing(6)
+
+        h_mirrors = QHBoxLayout()
+        h_mirrors.setSpacing(28)
+        self.chk_uid_mirror = QCheckBox("镜像 UID (硬件唯一识别码)")
+        self.chk_uid_mirror.setChecked(True)
+        self.chk_ctr_mirror = QCheckBox("镜像计数器 (防重放动态累加)")
+        self.chk_ctr_mirror.setChecked(True)
+        h_mirrors.addWidget(self.chk_uid_mirror)
+        h_mirrors.addWidget(self.chk_ctr_mirror)
+        h_mirrors.addStretch()
+        l_sdm_sub.addLayout(h_mirrors)
+
+        grid_sdm_keys = QGridLayout()
+        grid_sdm_keys.setSpacing(6)
+        self.lbl_f02_meta = QLabel("元数据加密 (MetaRead):")
+        grid_sdm_keys.addWidget(self.lbl_f02_meta, 0, 0)
         self.combo_f02_meta = QComboBox()
         populate_meta_read_combo(self.combo_f02_meta, "0xE")
-        grid_f02.addWidget(self.combo_f02_meta, 3, 1)
+        grid_sdm_keys.addWidget(self.combo_f02_meta, 0, 1)
 
-        grid_f02.addWidget(QLabel("计数器回读 (CtrRet):"), 3, 2)
+        self.lbl_f02_ctr_ret = QLabel("计数器回读 (CtrRet):")
+        grid_sdm_keys.addWidget(self.lbl_f02_ctr_ret, 0, 2)
         self.combo_f02_ctr_ret = QComboBox()
         populate_ctr_ret_combo(self.combo_f02_ctr_ret, "0xF")
-        grid_f02.addWidget(self.combo_f02_ctr_ret, 3, 3)
+        grid_sdm_keys.addWidget(self.combo_f02_ctr_ret, 0, 3)
+        l_sdm_sub.addLayout(grid_sdm_keys)
 
-        layout_files.addWidget(grp_f02)
+        body_sdm.addWidget(self.widget_sdm_sub)
+        self.chk_f02_sdm.toggled.connect(self.on_f02_sdm_toggled)
 
-        # File 01 & File 03
+        body_f02.addWidget(card_sdm)
+        layout_files.addWidget(card_f02)
+
+        # 2. File 01 & File 03 (底部双列对称卡片)
         h_files_layout = QHBoxLayout()
+        h_files_layout.setSpacing(10)
 
-        grp_f01 = QGroupBox("File 01 (CC 描述文件 - 32 字节)")
-        grp_f01.setStyleSheet("QGroupBox { border: 1px solid #CBD5E1; border-radius: 6px; margin-top: 6px; padding-top: 8px; font-weight: bold; }")
-        grid_f01 = QGridLayout(grp_f01)
+        # File 01 Unified Card
+        card_f01, body_f01 = _make_unified_card("File 01 (CC 描述文件)", "(32 字节)")
+
         self.chk_f01_en = QCheckBox("同步配置 File 01")
-        grid_f01.addWidget(self.chk_f01_en, 0, 0, 1, 2)
+        self.chk_f01_en.setStyleSheet("font-size: 12px; font-weight: bold; color: #0F172A;")
+        self.chk_f01_en.toggled.connect(self.on_f01_en_toggled)
+        body_f01.addWidget(self.chk_f01_en)
 
-        grid_f01.addWidget(QLabel("通信模式:"), 1, 0)
+        self.widget_f01_fields = QWidget()
+        grid_f01 = QGridLayout(self.widget_f01_fields)
+        grid_f01.setContentsMargins(0, 0, 0, 0)
+        grid_f01.setSpacing(6)
+        grid_f01.addWidget(QLabel("通信模式:"), 0, 0)
         self.combo_f01_comm = QComboBox()
         populate_comm_mode_combo(self.combo_f01_comm, "0x00")
-        grid_f01.addWidget(self.combo_f01_comm, 1, 1)
+        grid_f01.addWidget(self.combo_f01_comm, 0, 1)
 
-        grid_f01.addWidget(QLabel("读权限:"), 2, 0)
+        grid_f01.addWidget(QLabel("读权限:"), 1, 0)
         self.combo_f01_read = QComboBox()
         populate_access_rights_combo(self.combo_f01_read, "0xE")
-        grid_f01.addWidget(self.combo_f01_read, 2, 1)
+        grid_f01.addWidget(self.combo_f01_read, 1, 1)
 
-        grid_f01.addWidget(QLabel("写权限:"), 3, 0)
+        grid_f01.addWidget(QLabel("写权限:"), 2, 0)
         self.combo_f01_write = QComboBox()
         populate_access_rights_combo(self.combo_f01_write, "0x0")
-        grid_f01.addWidget(self.combo_f01_write, 3, 1)
+        grid_f01.addWidget(self.combo_f01_write, 2, 1)
 
-        grid_f01.addWidget(QLabel("修改权限:"), 4, 0)
+        grid_f01.addWidget(QLabel("修改权限:"), 3, 0)
         self.combo_f01_change = QComboBox()
         populate_access_rights_combo(self.combo_f01_change, "0x0")
-        grid_f01.addWidget(self.combo_f01_change, 4, 1)
+        grid_f01.addWidget(self.combo_f01_change, 3, 1)
+        body_f01.addWidget(self.widget_f01_fields)
 
-        h_files_layout.addWidget(grp_f01)
+        h_files_layout.addWidget(card_f01)
 
-        grp_f03 = QGroupBox("File 03 (私有扩展文件 - 128 字节)")
-        grp_f03.setStyleSheet("QGroupBox { border: 1px solid #CBD5E1; border-radius: 6px; margin-top: 6px; padding-top: 8px; font-weight: bold; }")
-        grid_f03 = QGridLayout(grp_f03)
+        # File 03 Unified Card
+        card_f03, body_f03 = _make_unified_card("File 03 (私有扩展文件)", "(128 字节)")
+
         self.chk_f03_en = QCheckBox("同步配置 File 03")
-        grid_f03.addWidget(self.chk_f03_en, 0, 0, 1, 2)
+        self.chk_f03_en.setStyleSheet("font-size: 12px; font-weight: bold; color: #0F172A;")
+        self.chk_f03_en.toggled.connect(self.on_f03_en_toggled)
+        body_f03.addWidget(self.chk_f03_en)
 
-        grid_f03.addWidget(QLabel("通信模式:"), 1, 0)
+        self.widget_f03_fields = QWidget()
+        grid_f03 = QGridLayout(self.widget_f03_fields)
+        grid_f03.setContentsMargins(0, 0, 0, 0)
+        grid_f03.setSpacing(6)
+        grid_f03.addWidget(QLabel("通信模式:"), 0, 0)
         self.combo_f03_comm = QComboBox()
         populate_comm_mode_combo(self.combo_f03_comm, "0x03")
-        grid_f03.addWidget(self.combo_f03_comm, 1, 1)
+        grid_f03.addWidget(self.combo_f03_comm, 0, 1)
 
-        grid_f03.addWidget(QLabel("读权限:"), 2, 0)
+        grid_f03.addWidget(QLabel("读权限:"), 1, 0)
         self.combo_f03_read = QComboBox()
         populate_access_rights_combo(self.combo_f03_read, "0x3")
-        grid_f03.addWidget(self.combo_f03_read, 2, 1)
+        grid_f03.addWidget(self.combo_f03_read, 1, 1)
 
-        grid_f03.addWidget(QLabel("写权限:"), 3, 0)
+        grid_f03.addWidget(QLabel("写权限:"), 2, 0)
         self.combo_f03_write = QComboBox()
         populate_access_rights_combo(self.combo_f03_write, "0x0")
-        grid_f03.addWidget(self.combo_f03_write, 3, 1)
+        grid_f03.addWidget(self.combo_f03_write, 2, 1)
 
-        grid_f03.addWidget(QLabel("修改权限:"), 4, 0)
+        grid_f03.addWidget(QLabel("修改权限:"), 3, 0)
         self.combo_f03_change = QComboBox()
         populate_access_rights_combo(self.combo_f03_change, "0x0")
-        grid_f03.addWidget(self.combo_f03_change, 4, 1)
+        grid_f03.addWidget(self.combo_f03_change, 3, 1)
+        body_f03.addWidget(self.widget_f03_fields)
 
-        h_files_layout.addWidget(grp_f03)
+        h_files_layout.addWidget(card_f03)
         layout_files.addLayout(h_files_layout)
 
         self.tabs.addTab(tab_files, "文件安全访问权限")
@@ -570,24 +777,24 @@ class RecipeEditDialog(QDialog):
         bottom_bar = QHBoxLayout()
 
         btn_import = QPushButton("导入配方文件")
-        btn_import.setStyleSheet("background-color: #F8FAFC; color: #334155; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 12px; font-size: 11px;")
+        btn_import.setStyleSheet("background-color: #F8FAFC; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 14px; font-size: 12px; font-weight: 500;")
         btn_import.clicked.connect(self.import_recipe)
         bottom_bar.addWidget(btn_import)
 
         btn_export = QPushButton("导出配方文件")
-        btn_export.setStyleSheet("background-color: #F8FAFC; color: #334155; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 12px; font-size: 11px;")
+        btn_export.setStyleSheet("background-color: #F8FAFC; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 14px; font-size: 12px; font-weight: 500;")
         btn_export.clicked.connect(self.export_recipe)
         bottom_bar.addWidget(btn_export)
 
         bottom_bar.addStretch()
 
         btn_cancel = QPushButton("取消")
-        btn_cancel.setStyleSheet("background-color: #F1F5F9; color: #475569; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 16px;")
+        btn_cancel.setStyleSheet("background-color: #F1F5F9; color: #334155; border: 1px solid #CBD5E1; border-radius: 4px; padding: 6px 18px; font-size: 12px; font-weight: 500;")
         btn_cancel.clicked.connect(self.reject)
         bottom_bar.addWidget(btn_cancel)
 
         btn_save = QPushButton("保存并应用配方")
-        btn_save.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; border: none; border-radius: 4px; padding: 6px 18px;")
+        btn_save.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; border: none; border-radius: 4px; padding: 6px 20px; font-size: 12px;")
         btn_save.clicked.connect(self.save_and_apply)
         bottom_bar.addWidget(btn_save)
 
@@ -598,36 +805,76 @@ class RecipeEditDialog(QDialog):
 
     def on_kdf_changed(self):
         kdf = self.combo_kdf.currentData() or "HKDF-SHA256"
+        is_fixed = ("FIXED" in kdf)
+
         if "CMAC" in kdf:
             self.input_info_pattern.setText("NXP")
-        elif "FIXED" in kdf:
-            self.combo_salt_src.setEnabled(False)
-            self.input_salt.setEnabled(False)
-            self.input_info_pattern.setEnabled(False)
-        else:
-            self.combo_salt_src.setEnabled(True)
-            self.input_salt.setEnabled(True)
-            self.input_info_pattern.setEnabled(True)
+        elif not is_fixed:
             if self.input_info_pattern.text().strip() in ("", "NXP"):
                 self.input_info_pattern.setText("ntag424|{UID}|{SLOT}")
-        self.on_salt_src_changed()
+
+        self.combo_salt_src.setEnabled(not is_fixed)
+        if hasattr(self, "lbl_salt_src"):
+            self.lbl_salt_src.setEnabled(not is_fixed)
+        self.input_info_pattern.setEnabled(not is_fixed)
+        if hasattr(self, "lbl_info_pattern"):
+            self.lbl_info_pattern.setEnabled(not is_fixed)
+
+        if is_fixed:
+            self.input_salt.setEnabled(False)
+            if hasattr(self, "lbl_custom_salt"):
+                self.lbl_custom_salt.setEnabled(False)
+            txt = self.input_salt.text().strip()
+            if txt:
+                self._custom_salt_cache = txt
+            self.input_salt.clear()
+            self.input_salt.setPlaceholderText("（固定主密钥模式下不使用盐值）")
+            self.input_info_pattern.setPlaceholderText("（固定主密钥模式下无需派生上下文）")
+        else:
+            self.input_info_pattern.setPlaceholderText("支持变量: {UID}, {SLOT}，例如 ntag424|{UID}|{SLOT}")
+            self.on_salt_src_changed()
 
     def on_salt_src_changed(self):
         src = self.combo_salt_src.currentData() or "UID_STR"
-        if src in ("UID_STR", "UID_BYTES"):
-            self.input_salt.setEnabled(False)
-            self.input_salt.setPlaceholderText("(已自动绑定卡片硬件 UID 作为盐值)")
-        elif src == "NONE":
-            self.input_salt.setEnabled(False)
-            self.input_salt.setPlaceholderText("(无盐值)")
-        else:  # CUSTOM
-            self.input_salt.setEnabled(True)
-            self.input_salt.setPlaceholderText("请输入自定义项目盐值，例如 PATROL_2026")
+        is_custom = (src == "CUSTOM")
+
+        if hasattr(self, "lbl_custom_salt"):
+            self.lbl_custom_salt.setEnabled(is_custom)
+        self.input_salt.setEnabled(is_custom)
+
+        if is_custom:
+            if not self.input_salt.text().strip():
+                cached = getattr(self, "_custom_salt_cache", "")
+                if cached:
+                    self.input_salt.setText(cached)
+            self.input_salt.setPlaceholderText("请输入自定义项目盐值，例如 PATROL_SYSTEM_2026")
+        else:
+            txt = self.input_salt.text().strip()
+            if txt:
+                self._custom_salt_cache = txt
+            self.input_salt.clear()
+            if src in ("UID_STR", "UID_HEX", "UID"):
+                self.input_salt.setPlaceholderText("（已自动绑定卡片硬件 UID 文本作为盐值）")
+            elif src in ("UID_BYTES", "UID_BIN"):
+                self.input_salt.setPlaceholderText("（已自动绑定卡片 7 字节原始 UID 字节流）")
+            elif src in ("NONE", "EMPTY"):
+                self.input_salt.setPlaceholderText("（无派生盐值 / 留空）")
+            else:
+                self.input_salt.setPlaceholderText("（当前盐值模式下不可编辑）")
 
     def on_aar_toggle(self):
         enabled = self.chk_enable_aar.isChecked()
         self.input_aar_pkg.setEnabled(enabled)
         self.update_offset_preview()
+
+    def on_f02_sdm_toggled(self, checked: bool):
+        self.widget_sdm_sub.setEnabled(checked)
+
+    def on_f01_en_toggled(self, checked: bool):
+        self.widget_f01_fields.setEnabled(checked)
+
+    def on_f03_en_toggled(self, checked: bool):
+        self.widget_f03_fields.setEnabled(checked)
 
     def update_offset_preview(self):
         url = self.input_url.text().strip()
@@ -665,13 +912,13 @@ class RecipeEditDialog(QDialog):
         c = self.config
         self.input_recipe_name.setText(c.get("recipe_name", generate_random_recipe_name()))
         self.input_master_key.setText(c.get("master_key", ""))
-        self.input_salt.setText(c.get("kdf_custom_salt", c.get("system_salt", "")))
+        self._custom_salt_cache = c.get("kdf_custom_salt", c.get("system_salt", ""))
+        self.input_salt.setText(self._custom_salt_cache)
         self.input_factory_key.setText(c.get("factory_key", "00" * 16))
         self.input_url.setText(c.get("url_template", ""))
         self.chk_enable_aar.setChecked(bool(c.get("enable_aar", False)))
         self.input_aar_pkg.setText(c.get("aar_package_name", "com.example.patrol"))
         self.input_aar_pkg.setEnabled(self.chk_enable_aar.isChecked())
-        self.spin_key_ver.setValue(int(c.get("key_version", 1)))
 
         def _set_combo(combo, val):
             idx = combo.findData(str(val))
@@ -697,9 +944,11 @@ class RecipeEditDialog(QDialog):
         self.chk_f02_sdm.setChecked(c.get("file02_sdm", True))
         self.chk_uid_mirror.setChecked(c.get("enable_uid_mirror", True))
         self.chk_ctr_mirror.setChecked(c.get("enable_ctr_mirror", True))
+        self.on_f02_sdm_toggled(self.chk_f02_sdm.isChecked())
 
         # File 01
         self.chk_f01_en.setChecked(c.get("file01_enabled", False))
+        self.on_f01_en_toggled(self.chk_f01_en.isChecked())
         _set_combo(self.combo_f01_comm, c.get("file01_comm_mode", "0x00"))
         _set_combo(self.combo_f01_read, c.get("file01_read", "0xE"))
         _set_combo(self.combo_f01_write, c.get("file01_write", "0x0"))
@@ -707,6 +956,7 @@ class RecipeEditDialog(QDialog):
 
         # File 03
         self.chk_f03_en.setChecked(c.get("file03_enabled", False))
+        self.on_f03_en_toggled(self.chk_f03_en.isChecked())
         _set_combo(self.combo_f03_comm, c.get("file03_comm_mode", "0x03"))
         _set_combo(self.combo_f03_read, c.get("file03_read", "0x3"))
         _set_combo(self.combo_f03_write, c.get("file03_write", "0x0"))
@@ -734,12 +984,16 @@ class RecipeEditDialog(QDialog):
         cfg["url_template"] = self.input_url.text().strip()
         cfg["enable_aar"] = self.chk_enable_aar.isChecked()
         cfg["aar_package_name"] = self.input_aar_pkg.text().strip()
-        cfg["key_version"] = self.spin_key_ver.value()
+        cfg["key_version"] = int(self.config.get("key_version", 1))
 
         cfg["kdf_algorithm"] = self.combo_kdf.currentData()
         cfg["kdf_salt_source"] = self.combo_salt_src.currentData()
-        cfg["kdf_custom_salt"] = self.input_salt.text().strip()
-        cfg["system_salt"] = self.input_salt.text().strip()
+        if cfg["kdf_salt_source"] == "CUSTOM":
+            custom_salt_val = self.input_salt.text().strip()
+        else:
+            custom_salt_val = getattr(self, "_custom_salt_cache", "") or self.config.get("kdf_custom_salt", "")
+        cfg["kdf_custom_salt"] = custom_salt_val
+        cfg["system_salt"] = custom_salt_val
         cfg["kdf_info_pattern"] = self.input_info_pattern.text().strip()
 
         cfg["file01_enabled"] = self.chk_f01_en.isChecked()
@@ -1120,12 +1374,12 @@ class AboutDialog(QDialog):
         top_layout.addWidget(lbl_logo)
 
         v_head = QVBoxLayout()
-        lbl_name = QLabel("NTAG 424 DNA 标签发卡与运维工具")
-        lbl_name.setFont(QFont("Arial", 12, QFont.Bold))
+        lbl_name = QLabel("NTAG424 Pro")
+        lbl_name.setFont(QFont("Arial", 13, QFont.Bold))
         lbl_name.setStyleSheet("color: #0F172A;")
         v_head.addWidget(lbl_name)
 
-        lbl_ver = QLabel(f"版本: {APP_VERSION}  |  授权协议: MIT License")
+        lbl_ver = QLabel(f"版本: {APP_VERSION}  |  NTAG 424 DNA 发卡与运维")
         lbl_ver.setStyleSheet("color: #64748B; font-size: 11px;")
         v_head.addWidget(lbl_ver)
         top_layout.addLayout(v_head)
@@ -1167,12 +1421,106 @@ class AboutDialog(QDialog):
 
 
 # ==============================================================================
+# UI 图标生成工具 (轻量无外部依赖矢量渲染)
+# ==============================================================================
+def make_search_icon(color_hex: str = "#64748B", size: int = 16) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color_hex), 1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawEllipse(3, 3, 7, 7)
+    painter.drawLine(9, 9, 13, 13)
+    painter.end()
+    return QIcon(pix)
+
+
+def ensure_chevron_icon(base_dir: str) -> str:
+    assets_dir = os.path.join(base_dir, "assets")
+    os.makedirs(assets_dir, exist_ok=True)
+    chevron_path = os.path.join(assets_dir, "chevron_down.png")
+    if not os.path.exists(chevron_path):
+        pix = QPixmap(32, 32)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#64748B"), 3.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.drawLine(QPointF(8.0, 13.0), QPointF(16.0, 20.0))
+        p.drawLine(QPointF(16.0, 20.0), QPointF(24.0, 13.0))
+        p.end()
+        pix.save(chevron_path)
+    return chevron_path.replace("\\", "/")
+
+
+def ensure_check_icon(base_dir: str) -> str:
+    assets_dir = os.path.join(base_dir, "assets")
+    os.makedirs(assets_dir, exist_ok=True)
+    check_path = os.path.join(assets_dir, "check_white.png")
+    if not os.path.exists(check_path):
+        pix = QPixmap(32, 32)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#FFFFFF"), 3.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.drawLine(QPointF(7.5, 16.0), QPointF(13.0, 22.0))
+        p.drawLine(QPointF(13.0, 22.0), QPointF(24.5, 9.5))
+        p.end()
+        pix.save(check_path)
+    return check_path.replace("\\", "/")
+
+
+def make_export_icon(color_hex: str = "#1D4ED8", size: int = 16) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color_hex), 1.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(3, 11, 3, 13)
+    painter.drawLine(3, 13, 13, 13)
+    painter.drawLine(13, 13, 13, 11)
+    painter.drawLine(8, 3, 8, 10)
+    painter.drawLine(5, 7, 8, 10)
+    painter.drawLine(11, 7, 8, 10)
+    painter.end()
+    return QIcon(pix)
+
+
+def make_clear_icon(color_hex: str = "#64748B", size: int = 16) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color_hex), 1.4)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(3, 5, 13, 5)
+    painter.drawLine(5, 5, 5, 13)
+    painter.drawLine(11, 5, 11, 13)
+    painter.drawLine(5, 13, 11, 13)
+    painter.drawLine(7, 7, 7, 11)
+    painter.drawLine(9, 7, 9, 11)
+    painter.drawLine(6, 3, 10, 3)
+    painter.end()
+    return QIcon(pix)
+
+
+# ==============================================================================
 # 主窗口 (MainWindow)
 # ==============================================================================
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NTAG 424 DNA 标签发卡与运维工具")
+        self.setWindowTitle("NTAG424 Pro")
         self.resize(1120, 880)
         self.setMinimumSize(980, 750)
 
@@ -1209,9 +1557,22 @@ class MainWindow(QMainWindow):
         self.setup_menu_bar()
         self.update_recipe_banner()
         self.sync_worker_config()
+        self.center_on_top_screen()
 
         # Start background polling worker
         self.worker.start()
+
+    def center_on_top_screen(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            w = self.width()
+            h = min(self.height(), geo.height() - 40)
+            if h != self.height():
+                self.resize(w, h)
+            x = geo.x() + max(0, (geo.width() - w) // 2)
+            y = geo.y() + max(20, int((geo.height() - h) * 0.22))
+            self.move(x, y)
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -1236,10 +1597,14 @@ class MainWindow(QMainWindow):
         h_layout.setContentsMargins(12, 6, 12, 6)
         h_layout.setSpacing(12)
 
-        title_label = QLabel("NTAG 424 DNA 标签发卡与运维工具")
+        title_label = QLabel("NTAG424 Pro")
         title_label.setFont(QFont("Arial", 14, QFont.Bold))
         title_label.setStyleSheet("color: #0F172A; border: none;")
         h_layout.addWidget(title_label)
+
+        sub_label = QLabel("DNA 标签发卡与运维")
+        sub_label.setStyleSheet("color: #64748B; font-size: 11px; border: none; padding-top: 3px;")
+        h_layout.addWidget(sub_label)
 
         h_layout.addStretch()
 
@@ -1540,86 +1905,181 @@ class MainWindow(QMainWindow):
         table_container = QWidget()
         t_layout = QVBoxLayout(table_container)
         t_layout.setContentsMargins(0, 2, 0, 0)
-        t_layout.setSpacing(4)
+        t_layout.setSpacing(0)
 
-        t_head_layout = QHBoxLayout()
+        # 1. 现代化表格工具栏面板 (统一卡片外观 + 矢量图标 + 状态指示徽标)
+        table_toolbar = QFrame()
+        table_toolbar.setObjectName("table_toolbar")
+        table_toolbar.setStyleSheet("""
+            QFrame#table_toolbar {
+                background-color: #F8FAFC;
+                border: 1px solid #CBD5E1;
+                border-bottom: 1px solid #E2E8F0;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 4px 6px;
+            }
+        """)
+        t_head_layout = QHBoxLayout(table_toolbar)
+        t_head_layout.setContentsMargins(6, 4, 6, 4)
         t_head_layout.setSpacing(8)
+
         lbl_table = QLabel("作业执行记录")
-        lbl_table.setStyleSheet("font-weight: bold; font-size: 11px; color: #475569;")
+        lbl_table.setFont(QFont("Arial", 11, QFont.Bold))
+        lbl_table.setStyleSheet("color: #1E293B; border: none; background: transparent;")
         t_head_layout.addWidget(lbl_table)
 
-        # 1. 实时全字段检索输入框
-        self.input_table_search = QLineEdit()
-        self.input_table_search.setPlaceholderText("🔍 快速检索 UID / 链接 / 密钥...")
-        self.input_table_search.setClearButtonEnabled(True)
-        self.input_table_search.setFixedWidth(210)
-        self.input_table_search.setStyleSheet("""
-            QLineEdit {
-                background: #FFFFFF;
+        # 动态筛选与匹配指示徽章
+        self.lbl_table_badge = QLabel("共 0 条")
+        self.lbl_table_badge.setStyleSheet("""
+            QLabel {
+                background-color: #E2E8F0;
+                color: #475569;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 2px 8px;
+                border-radius: 9px;
                 border: 1px solid #CBD5E1;
-                border-radius: 4px;
+            }
+        """)
+        t_head_layout.addWidget(self.lbl_table_badge)
+
+        t_head_layout.addStretch()
+
+        # 实时全字段检索输入框 (带矢量放大镜图标与一键清空)
+        self.input_table_search = QLineEdit()
+        self.input_table_search.setObjectName("table_search_input")
+        self.input_table_search.setPlaceholderText("检索 UID / 链接 / 密钥 / 备注...")
+        self.input_table_search.setClearButtonEnabled(True)
+        self.input_table_search.setFixedWidth(225)
+        self.input_table_search.setFixedHeight(26)
+        self.input_table_search.addAction(make_search_icon("#64748B"), QLineEdit.ActionPosition.LeadingPosition)
+        self.input_table_search.setStyleSheet("""
+            QLineEdit#table_search_input {
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 5px;
                 padding: 2px 6px;
                 font-size: 11px;
+                color: #1E293B;
             }
-            QLineEdit:focus { border-color: #2563EB; }
+            QLineEdit#table_search_input:hover {
+                border-color: #94A3B8;
+            }
+            QLineEdit#table_search_input:focus {
+                border-color: #2563EB;
+                background-color: #FFFFFF;
+            }
         """)
         self.input_table_search.textChanged.connect(self.on_table_search_changed)
         t_head_layout.addWidget(self.input_table_search)
 
-        # 2. 状态筛选下拉框
+        # 状态筛选下拉框 (简洁纯文字 + 现代矢量微箭头)
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        chevron_path = ensure_chevron_icon(base_dir)
+
         self.combo_table_status = QComboBox()
+        self.combo_table_status.setObjectName("table_status_combo")
         self.combo_table_status.addItem("全部状态", "ALL")
-        self.combo_table_status.addItem("仅看成功 (SUCCESS)", "SUCCESS")
-        self.combo_table_status.addItem("仅看失败 (FAIL)", "FAIL")
-        self.combo_table_status.setFixedWidth(145)
-        self.combo_table_status.setStyleSheet("""
-            QComboBox {
-                background: #FFFFFF;
+        self.combo_table_status.addItem("仅看成功", "SUCCESS")
+        self.combo_table_status.addItem("仅看失败", "FAIL")
+        self.combo_table_status.setFixedWidth(102)
+        self.combo_table_status.setFixedHeight(26)
+        self.combo_table_status.setStyleSheet(f"""
+            QComboBox#table_status_combo {{
+                background-color: #FFFFFF;
                 border: 1px solid #CBD5E1;
-                border-radius: 4px;
-                padding: 2px 6px;
+                border-radius: 5px;
+                padding: 2px 20px 2px 8px;
                 font-size: 11px;
-            }
+                color: #334155;
+                font-weight: 500;
+            }}
+            QComboBox#table_status_combo:hover {{
+                border-color: #94A3B8;
+            }}
+            QComboBox#table_status_combo:focus {{
+                border-color: #2563EB;
+            }}
+            QComboBox#table_status_combo::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left: none;
+            }}
+            QComboBox#table_status_combo::down-arrow {{
+                image: url("{chevron_path}");
+                width: 9px;
+                height: 9px;
+                margin-right: 6px;
+            }}
+            QComboBox#table_status_combo QAbstractItemView {{
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                selection-background-color: #EFF6FF;
+                selection-color: #1D4ED8;
+                padding: 4px;
+                outline: none;
+            }}
         """)
         self.combo_table_status.currentIndexChanged.connect(self.on_table_status_filter_changed)
         t_head_layout.addWidget(self.combo_table_status)
 
-        t_head_layout.addStretch()
-
+        # 导出 CSV 按钮 (带矢量下载图标)
         btn_export = QPushButton("导出 CSV")
         btn_export.setFixedHeight(26)
+        btn_export.setIcon(make_export_icon("#1D4ED8"))
         btn_export.setStyleSheet("""
             QPushButton {
-                background-color: #FFFFFF;
-                color: #334155;
-                border: 1px solid #CBD5E1;
-                border-radius: 4px;
+                background-color: #EFF6FF;
+                color: #1D4ED8;
+                border: 1px solid #BFDBFE;
+                border-radius: 5px;
                 padding: 2px 10px;
                 font-size: 11px;
+                font-weight: 600;
             }
-            QPushButton:hover { background-color: #F8FAFC; }
+            QPushButton:hover {
+                background-color: #DBEAFE;
+                border-color: #93C5FD;
+            }
+            QPushButton:pressed {
+                background-color: #BFDBFE;
+            }
         """)
         btn_export.clicked.connect(self.export_records)
         t_head_layout.addWidget(btn_export)
 
-        btn_clear = QPushButton("清空记录")
+        # 清空记录按钮 (带矢量废纸篓图标)
+        btn_clear = QPushButton("清空")
         btn_clear.setFixedHeight(26)
+        btn_clear.setIcon(make_clear_icon("#64748B"))
         btn_clear.setStyleSheet("""
             QPushButton {
                 background-color: #FFFFFF;
-                color: #334155;
+                color: #64748B;
                 border: 1px solid #CBD5E1;
-                border-radius: 4px;
+                border-radius: 5px;
                 padding: 2px 10px;
                 font-size: 11px;
+                font-weight: 500;
             }
-            QPushButton:hover { background-color: #F8FAFC; }
+            QPushButton:hover {
+                background-color: #FEF2F2;
+                color: #DC2626;
+                border-color: #FECACA;
+            }
+            QPushButton:pressed {
+                background-color: #FEE2E2;
+            }
         """)
         btn_clear.clicked.connect(self.clear_records)
         t_head_layout.addWidget(btn_clear)
-        t_layout.addLayout(t_head_layout)
 
-        # 3. 高性能虚拟视口表格 (QTableView + ProxyModel)
+        t_layout.addWidget(table_toolbar)
+
+        # 2. 高性能虚拟视口表格 (QTableView + ProxyModel)
         self.table = QTableView()
         self.table.setModel(self.proxy_model)
         self.table.setSortingEnabled(True)
@@ -1645,17 +2105,22 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setStyleSheet("""
             QTableView {
-                border: 1px solid #E2E8F0;
+                border: 1px solid #CBD5E1;
+                border-top: none;
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
                 background-color: #FFFFFF;
                 gridline-color: #F1F5F9;
                 font-size: 11px;
             }
             QHeaderView::section {
-                background-color: #F8FAFC;
+                background-color: #F1F5F9;
                 color: #475569;
                 font-weight: bold;
-                border: 1px solid #E2E8F0;
-                padding: 4px;
+                border: none;
+                border-right: 1px solid #E2E8F0;
+                border-bottom: 1px solid #CBD5E1;
+                padding: 5px 6px;
             }
         """)
         t_layout.addWidget(self.table)
@@ -2163,7 +2628,7 @@ class MainWindow(QMainWindow):
 
         menu_help.addSeparator()
 
-        act_about = QAction("关于 NTAG 424 DNA 发卡工具(&A)...", self)
+        act_about = QAction("关于 NTAG424 Pro(&A)...", self)
         act_about.triggered.connect(self.show_about_dialog)
         menu_help.addAction(act_about)
 
@@ -2311,12 +2776,46 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------
     # 虚拟表格过滤与检索回调
     # -------------------------------------------------------------
+    def update_table_filter_badge(self):
+        total = self.table_model.rowCount()
+        shown = self.proxy_model.rowCount()
+        is_filtered = bool(self.input_table_search.text().strip() or (self.combo_table_status.currentData() != "ALL"))
+
+        if is_filtered:
+            self.lbl_table_badge.setText(f"已筛选: {shown} / {total} 条")
+            self.lbl_table_badge.setStyleSheet("""
+                QLabel {
+                    background-color: #EFF6FF;
+                    color: #1D4ED8;
+                    font-size: 10px;
+                    font-weight: bold;
+                    padding: 2px 8px;
+                    border-radius: 9px;
+                    border: 1px solid #BFDBFE;
+                }
+            """)
+        else:
+            self.lbl_table_badge.setText(f"共 {total} 条")
+            self.lbl_table_badge.setStyleSheet("""
+                QLabel {
+                    background-color: #E2E8F0;
+                    color: #475569;
+                    font-size: 10px;
+                    font-weight: bold;
+                    padding: 2px 8px;
+                    border-radius: 9px;
+                    border: 1px solid #CBD5E1;
+                }
+            """)
+
     def on_table_search_changed(self, text: str):
         self.proxy_model.set_keyword(text)
+        self.update_table_filter_badge()
 
     def on_table_status_filter_changed(self, idx: int):
         status = self.combo_table_status.currentData()
         self.proxy_model.set_status_filter(status or "ALL")
+        self.update_table_filter_badge()
 
     # -------------------------------------------------------------
     # 作业记录与导出 (基于虚拟数据模型)
@@ -2329,6 +2828,7 @@ class MainWindow(QMainWindow):
         succ = sum(1 for r in self.table_model._records if r.get("status") == "SUCCESS")
         fail = total - succ
         self.lbl_batch_stats.setText(f"已处理: {total} 张  |  成功: {succ}  |  失败: {fail}")
+        self.update_table_filter_badge()
 
     def export_records(self):
         records = self.table_model.get_records()
@@ -2349,6 +2849,7 @@ class MainWindow(QMainWindow):
             self.table_model.clear()
             self.lbl_batch_stats.setText("已处理: 0 张  |  成功: 0  |  失败: 0")
             self.append_log("[INFO] 已清空作业明细记录")
+            self.update_table_filter_badge()
 
     def closeEvent(self, event):
         self.worker.stop()
@@ -2365,6 +2866,8 @@ def main():
             pass
 
     app = QApplication(sys.argv)
+    app.setApplicationName("NTAG424 Pro")
+    app.setApplicationDisplayName("NTAG424 Pro")
 
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     icon_path = os.path.join(base_dir, "assets", "icon.png")

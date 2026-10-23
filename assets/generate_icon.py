@@ -10,145 +10,154 @@ import os
 import struct
 import subprocess
 from PySide6.QtGui import (
-    QImage, QPainter, QColor, QPen, QBrush, QLinearGradient, QPainterPath, QFont
+    QImage, QPainter, QColor, QPen, QLinearGradient, QRadialGradient, QPainterPath
 )
 from PySide6.QtCore import Qt, QRectF, QPointF
 
 def draw_icon(size: int = 512) -> QImage:
     img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)
-    
     scale = size / 512.0
     
-    painter = QPainter(img)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
     
-    # 1. Background Squircle with Dark Indigo Gradient
-    margin = 24 * scale
-    radius = 96 * scale
-    rect = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+    # 1. macOS Tile Base (420x420 centered in 512x512, Apple HIG standard squircle)
+    tile_w, tile_h = 420 * scale, 420 * scale
+    tile_x, tile_y = (size - tile_w) / 2, (size - tile_h) / 2 - 2 * scale
+    radius = 94 * scale
     
-    bg_grad = QLinearGradient(0, 0, size, size)
+    # Deep soft shadow
+    shadow_path = QPainterPath()
+    shadow_path.addRoundedRect(QRectF(tile_x, tile_y + 14 * scale, tile_w, tile_h), radius, radius)
+    p.fillPath(shadow_path, QColor(0, 0, 0, 80))
+    
+    # Base squircle: Deep Titanium Midnight to Electric Cobalt
+    bg_grad = QLinearGradient(tile_x, tile_y, tile_x + tile_w, tile_y + tile_h)
     bg_grad.setColorAt(0.0, QColor("#1E293B"))  # Slate 800
-    bg_grad.setColorAt(0.5, QColor("#0F172A"))  # Slate 900
-    bg_grad.setColorAt(1.0, QColor("#020617"))  # Slate 950
+    bg_grad.setColorAt(0.4, QColor("#0F172A"))  # Slate 900
+    bg_grad.setColorAt(1.0, QColor("#0B132B"))  # Deep Navy Midnight
     
-    bg_path = QPainterPath()
-    bg_path.addRoundedRect(rect, radius, radius)
+    tile_path = QPainterPath()
+    tile_path.addRoundedRect(QRectF(tile_x, tile_y, tile_w, tile_h), radius, radius)
     
-    # Outer subtle glow border
-    painter.setPen(QPen(QColor("#334155"), 2.5 * scale))
-    painter.setBrush(bg_grad)
-    painter.drawPath(bg_path)
+    # Subtle outer bevel
+    p.setPen(QPen(QColor(255, 255, 255, 35), 1.5 * scale))
+    p.setBrush(bg_grad)
+    p.drawPath(tile_path)
     
-    # 2. Stylized NFC Smart Card in the center
-    # Card angled/tilted or flat modern perspective
-    card_w = 260 * scale
-    card_h = 160 * scale
-    card_x = (size - card_w) / 2 - 15 * scale
-    card_y = (size - card_h) / 2 + 35 * scale
+    # Center ambient glow
+    ambient = QRadialGradient(size / 2, size / 2, 200 * scale)
+    ambient.setColorAt(0.0, QColor(37, 99, 235, 60))
+    ambient.setColorAt(0.8, QColor(30, 58, 138, 15))
+    ambient.setColorAt(1.0, QColor(0, 0, 0, 0))
+    p.setPen(Qt.NoPen)
+    p.setBrush(ambient)
+    p.drawPath(tile_path)
+    
+    # 2. Hero Object: Floating Smartcard in Vibrant Blue
+    card_w, card_h = 300 * scale, 190 * scale
+    card_x = (size - card_w) / 2
+    card_y = (size - card_h) / 2 + 12 * scale
     card_rect = QRectF(card_x, card_y, card_w, card_h)
+    card_radius = 18 * scale
     
     # Card drop shadow
-    shadow_path = QPainterPath()
-    shadow_path.addRoundedRect(QRectF(card_x, card_y + 8 * scale, card_w, card_h), 16 * scale, 16 * scale)
-    painter.fillPath(shadow_path, QColor(0, 0, 0, 100))
+    c_shadow = QPainterPath()
+    c_shadow.addRoundedRect(QRectF(card_x, card_y + 10 * scale, card_w, card_h), card_radius, card_radius)
+    p.fillPath(c_shadow, QColor(0, 0, 0, 100))
     
-    # Card Body: Royal Blue Gradient
+    # Card body: Royal Blue gradient
     card_grad = QLinearGradient(card_x, card_y, card_x + card_w, card_y + card_h)
     card_grad.setColorAt(0.0, QColor("#2563EB"))  # Blue 600
-    card_grad.setColorAt(0.7, QColor("#1D4ED8"))  # Blue 700
-    card_grad.setColorAt(1.0, QColor("#0F172A"))  # Dark Blue / Slate
+    card_grad.setColorAt(0.55, QColor("#1D4ED8")) # Blue 700
+    card_grad.setColorAt(1.0, QColor("#1E1B4B"))  # Indigo 950
     
     card_path = QPainterPath()
-    card_path.addRoundedRect(card_rect, 16 * scale, 16 * scale)
-    painter.setPen(QPen(QColor("#60A5FA"), 2 * scale))
-    painter.setBrush(card_grad)
-    painter.drawPath(card_path)
+    card_path.addRoundedRect(card_rect, card_radius, card_radius)
+    p.setPen(QPen(QColor("#60A5FA"), 2.2 * scale))
+    p.setBrush(card_grad)
+    p.drawPath(card_path)
     
-    # Gold / Amber IC Chip on Card
-    chip_x = card_x + 30 * scale
-    chip_y = card_y + 35 * scale
-    chip_w = 46 * scale
-    chip_h = 36 * scale
+    # Card gloss reflection (top half subtle highlight)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(255, 255, 255, 18))
+    p.drawRoundedRect(QRectF(card_x, card_y, card_w, card_h * 0.45), card_radius, card_radius)
+    
+    # 3. Gold Cryptographic Chip (Left side)
+    chip_x = card_x + 32 * scale
+    chip_y = card_y + 44 * scale
+    chip_w = 56 * scale
+    chip_h = 44 * scale
     chip_rect = QRectF(chip_x, chip_y, chip_w, chip_h)
+    chip_radius = 8 * scale
     
     chip_grad = QLinearGradient(chip_x, chip_y, chip_x + chip_w, chip_y + chip_h)
-    chip_grad.setColorAt(0.0, QColor("#FDE047"))  # Gold 300
-    chip_grad.setColorAt(0.5, QColor("#EAB308"))  # Gold 500
-    chip_grad.setColorAt(1.0, QColor("#CA8A04"))  # Gold 600
+    chip_grad.setColorAt(0.0, QColor("#FEF08A"))  # Yellow 200
+    chip_grad.setColorAt(0.3, QColor("#FACC15"))  # Yellow 400
+    chip_grad.setColorAt(0.7, QColor("#EAB308"))  # Yellow 500
+    chip_grad.setColorAt(1.0, QColor("#A16207"))  # Yellow 700
     
     chip_path = QPainterPath()
-    chip_path.addRoundedRect(chip_rect, 6 * scale, 6 * scale)
-    painter.setPen(QPen(QColor("#A16207"), 1.5 * scale))
-    painter.setBrush(chip_grad)
-    painter.drawPath(chip_path)
+    chip_path.addRoundedRect(chip_rect, chip_radius, chip_radius)
+    p.setPen(QPen(QColor("#78350F"), 1.6 * scale))
+    p.setBrush(chip_grad)
+    p.drawPath(chip_path)
     
-    # Chip internal grid contacts
-    painter.setPen(QPen(QColor("#A16207"), 1.2 * scale))
-    painter.drawLine(chip_x, chip_y + chip_h / 2, chip_x + chip_w, chip_y + chip_h / 2)
-    painter.drawLine(chip_x + chip_w / 3, chip_y, chip_x + chip_w / 3, chip_y + chip_h)
-    painter.drawLine(chip_x + 2 * chip_w / 3, chip_y, chip_x + 2 * chip_w / 3, chip_y + chip_h)
+    # Chip circuit etching
+    p.setPen(QPen(QColor("#78350F"), 1.4 * scale))
+    p.drawLine(chip_x, chip_y + chip_h / 2, chip_x + chip_w, chip_y + chip_h / 2)
+    p.drawLine(chip_x + chip_w * 0.35, chip_y, chip_x + chip_w * 0.35, chip_y + chip_h)
+    p.drawLine(chip_x + chip_w * 0.65, chip_y, chip_x + chip_w * 0.65, chip_y + chip_h)
     
-    # Card Typography: "424 DNA"
-    painter.setPen(QColor("#93C5FD"))
-    font = QFont("Arial", int(14 * scale), QFont.Bold)
-    font.setLetterSpacing(QFont.AbsoluteSpacing, 2 * scale)
-    painter.setFont(font)
-    painter.drawText(QRectF(card_x + 30 * scale, card_y + card_h - 40 * scale, 200 * scale, 25 * scale), Qt.AlignLeft | Qt.AlignVCenter, "NTAG 424 DNA")
+    # 4. Bold NFC Wireless Broadcast Waves (Right side)
+    wave_cx = card_x + card_w - 75 * scale
+    wave_cy = card_y + card_h / 2
     
-    # 3. NFC Wireless Broadcast Waves (Cyan / Electric Sky Blue)
-    # Originating from the top-right of the card upwards
-    wave_center = QPointF(card_x + card_w - 20 * scale, card_y + 20 * scale)
-    
-    wave_colors = [
-        QColor("#38BDF8"),  # Inner (brightest cyan)
-        QColor("#0EA5E9"),  # Middle
-        QColor("#0284C7"),  # Outer
+    # Concentric signal waves opening towards right
+    waves = [
+        (22 * scale, "#FFFFFF", 4.2 * scale),
+        (42 * scale, "#38BDF8", 3.8 * scale),
+        (62 * scale, "#0284C7", 3.4 * scale),
     ]
-    radii = [40 * scale, 70 * scale, 100 * scale]
-    widths = [5.5 * scale, 4.5 * scale, 3.5 * scale]
-    
-    for r, col, w in zip(radii, wave_colors, widths):
-        pen = QPen(col, w, Qt.SolidLine, Qt.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
+    for r, col_hex, w in waves:
+        pen = QPen(QColor(col_hex), w, Qt.SolidLine, Qt.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        arc_box = QRectF(wave_cx - r, wave_cy - r, 2 * r, 2 * r)
+        p.drawArc(arc_box, -50 * 16, 100 * 16)
         
-        # Arc from ~30 deg to ~120 deg
-        arc_rect = QRectF(wave_center.x() - r, wave_center.y() - r, 2 * r, 2 * r)
-        painter.drawArc(arc_rect, int(35 * 16), int(65 * 16))
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#FFFFFF"))
+    p.drawEllipse(QPointF(wave_cx, wave_cy), 4.5 * scale, 4.5 * scale)
     
-    # 4. Security Verification Emblem / Shield (Emerald Green Badge)
-    # Symbolizing SUN (Secure Unique NFC) / CMAC authentication
-    shield_w = 64 * scale
-    shield_h = 74 * scale
-    shield_cx = card_x + card_w - 55 * scale
-    shield_cy = card_y + card_h - 45 * scale
+    # 5. Security / DNA Shield in Card Bottom-Left (Sun verification badge)
+    shield_cx = chip_x + chip_w / 2
+    shield_cy = card_y + card_h - 35 * scale
+    shield_w = 28 * scale
+    shield_h = 32 * scale
     
     shield_path = QPainterPath()
     shield_path.moveTo(shield_cx, shield_cy - shield_h / 2)
-    shield_path.lineTo(shield_cx + shield_w / 2, shield_cy - shield_h / 2 + 10 * scale)
-    shield_path.quadTo(shield_cx + shield_w / 2, shield_cy + 15 * scale, shield_cx, shield_cy + shield_h / 2)
-    shield_path.quadTo(shield_cx - shield_w / 2, shield_cy + 15 * scale, shield_cx - shield_w / 2, shield_cy - shield_h / 2 + 10 * scale)
+    shield_path.lineTo(shield_cx + shield_w / 2, shield_cy - shield_h / 2 + 5 * scale)
+    shield_path.quadTo(shield_cx + shield_w / 2, shield_cy + 8 * scale, shield_cx, shield_cy + shield_h / 2)
+    shield_path.quadTo(shield_cx - shield_w / 2, shield_cy + 8 * scale, shield_cx - shield_w / 2, shield_cy - shield_h / 2 + 5 * scale)
     shield_path.closeSubpath()
     
     shield_grad = QLinearGradient(shield_cx, shield_cy - shield_h / 2, shield_cx, shield_cy + shield_h / 2)
-    shield_grad.setColorAt(0.0, QColor("#10B981"))  # Emerald 500
-    shield_grad.setColorAt(1.0, QColor("#047857"))  # Emerald 700
+    shield_grad.setColorAt(0.0, QColor("#10B981"))
+    shield_grad.setColorAt(1.0, QColor("#047857"))
+    p.setPen(QPen(QColor("#A7F3D0"), 1.4 * scale))
+    p.setBrush(shield_grad)
+    p.drawPath(shield_path)
     
-    # Shield glow / border
-    painter.setPen(QPen(QColor("#A7F3D0"), 2 * scale))
-    painter.setBrush(shield_grad)
-    painter.drawPath(shield_path)
+    # Mini checkmark in shield
+    p.setPen(QPen(QColor("#FFFFFF"), 2.2 * scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.drawLine(shield_cx - 6 * scale, shield_cy, shield_cx - 2 * scale, shield_cy + 4 * scale)
+    p.drawLine(shield_cx - 2 * scale, shield_cy + 4 * scale, shield_cx + 6 * scale, shield_cy - 4 * scale)
     
-    # White checkmark in shield
-    check_pen = QPen(QColor("#FFFFFF"), 4 * scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-    painter.setPen(check_pen)
-    painter.drawLine(shield_cx - 14 * scale, shield_cy + 2 * scale, shield_cx - 4 * scale, shield_cy + 12 * scale)
-    painter.drawLine(shield_cx - 4 * scale, shield_cy + 12 * scale, shield_cx + 14 * scale, shield_cy - 10 * scale)
-    
-    painter.end()
+    p.end()
     return img
 
 def build_ico(images: dict, output_path: str):

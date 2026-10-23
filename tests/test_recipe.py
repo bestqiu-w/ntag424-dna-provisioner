@@ -4,7 +4,7 @@ Test suite for Recipe Export and Import.
 import os
 import json
 import tempfile
-from utils.config import DEFAULT_CONFIG, load_config, save_config
+from utils.config import DEFAULT_CONFIG
 
 def test_recipe_roundtrip():
     # 1. Prepare sample recipe

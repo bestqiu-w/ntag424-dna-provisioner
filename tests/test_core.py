@@ -2,7 +2,7 @@
 Unit tests for KDF, SDM builder, and FileSettings generation.
 """
 
-from core.kdf import derive_key, derive_all_keys, KDF_ALGORITHMS
+from core.kdf import derive_all_keys, KDF_ALGORITHMS
 from core.sdm_builder import build_sdm_ndef
 
 

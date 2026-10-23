@@ -22,7 +22,7 @@ from core.crypto_util import (
     xor_bytes,
 )
 from core.kdf import derive_all_keys
-from core.sdm_builder import SDMConfig, build_sdm_ndef, decode_ndef_uri
+from core.sdm_builder import build_sdm_ndef, decode_ndef_uri
 
 logger = logging.getLogger(__name__)
 

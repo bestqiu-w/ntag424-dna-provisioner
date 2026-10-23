@@ -127,7 +127,7 @@ jobs:
             cp -R dist/ntag424-dna-provisioner.app dist/dmg_root/
             ln -s /Applications dist/dmg_root/Applications
             cp README.md dist/dmg_root/
-            hdiutil create -volname "NTAG 424 DNA Provisioner" \
+            hdiutil create -volname "NTAG424 Pro" \
               -srcfolder dist/dmg_root \
               -ov -format UDZO \
               ntag424-dna-provisioner-${{ matrix.platform_id }}.dmg

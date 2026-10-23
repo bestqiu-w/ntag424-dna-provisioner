@@ -3,7 +3,6 @@ Batch production log and audit CSV exporter.
 """
 
 import csv
-from typing import List, Dict, Any
 
 
 def export_to_csv(arg1, arg2) -> bool:

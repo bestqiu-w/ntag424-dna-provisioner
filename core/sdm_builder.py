@@ -45,6 +45,20 @@ def build_sdm_ndef(url_template: str, aar_package: Optional[str] = None) -> SDMC
     as Record 2, allowing Android phones to automatically launch the app while iPhones seamlessly
     open the URI verification landing page.
     """
+    # Support NXP TagXplorer / TapLinx style placeholders (%04u, %SC, %016m, etc.)
+    nxp_map = [
+        ("%014u", "{UID}"), ("%014U", "{UID}"),
+        ("%04u", "{UID}"), ("%04U", "{UID}"),
+        ("%u", "{UID}"), ("%U", "{UID}"),
+        ("%SC", "{CTR}"), ("%sc", "{CTR}"),
+        ("%06c", "{CTR}"), ("%06C", "{CTR}"),
+        ("%016m", "{CMAC}"), ("%016M", "{CMAC}"),
+        ("%08m", "{CMAC}"), ("%08M", "{CMAC}"),
+        ("%m", "{CMAC}"), ("%M", "{CMAC}"),
+    ]
+    for old, new in nxp_map:
+        url_template = url_template.replace(old, new)
+
     # Normalize placeholders to uppercase
     url_template = (
         url_template.replace("{uid}", "{UID}")
