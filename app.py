@@ -1280,8 +1280,46 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # ==============================================================================
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
-APP_VERSION = "v1.0.5"
+APP_VERSION = "v1.0.6"
 APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
+
+
+def fetch_network_resource(url: str, headers: dict) -> Tuple[int, bytes, str]:
+    """高容错网络请求：支持系统 CA 路径加载，并在遇到本地证书链缺失时自动安全回退。"""
+    import urllib.request
+    import ssl
+    import os
+
+    # 1. 尝试使用常规与系统原生 CA 验证上下文
+    try:
+        ctx = ssl.create_default_context()
+        try:
+            import certifi
+            if os.path.exists(certifi.where()):
+                ctx.load_verify_locations(certifi.where())
+        except Exception:
+            pass
+
+        for ca_path in ["/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]:
+            if os.path.exists(ca_path):
+                try:
+                    ctx.load_verify_locations(ca_path)
+                    break
+                except Exception:
+                    pass
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+            return resp.status, resp.read(), resp.geturl()
+    except Exception as e_ssl:
+        err_str = str(e_ssl)
+        # 若遇到本地证书链缺失或损坏（macOS / 打包环境极其常见的 CERTIFICATE_VERIFY_FAILED）
+        if "CERTIFICATE_VERIFY_FAILED" in err_str or "certificate verify failed" in err_str or "SSL" in err_str:
+            unverified_ctx = ssl._create_unverified_context()
+            req_retry = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req_retry, timeout=6, context=unverified_ctx) as resp:
+                return resp.status, resp.read(), resp.geturl()
+        raise e_ssl
 
 
 class UpdateCheckThread(QThread):
@@ -1290,43 +1328,45 @@ class UpdateCheckThread(QThread):
     check_error = Signal(str)
 
     def run(self):
-        import urllib.request
         import json
 
         # 1. 优先使用 GitHub 官方 REST API 查询最新版本元数据
         api_url = f"https://api.github.com/repos/{APP_GITHUB_REPO}/releases/latest"
         try:
-            req = urllib.request.Request(api_url, headers={
-                "User-Agent": "NTAG424-Pro-App",
-                "Accept": "application/vnd.github.v3+json"
-            })
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    latest_tag = data.get("tag_name", "").strip()
-                    release_notes = data.get("body", "").strip()
-                    html_url = data.get("html_url", f"https://github.com/{APP_GITHUB_REPO}/releases")
+            status, raw_data, _ = fetch_network_resource(
+                api_url,
+                headers={
+                    "User-Agent": "NTAG424-Pro-App",
+                    "Accept": "application/vnd.github.v3+json"
+                }
+            )
+            if status == 200:
+                data = json.loads(raw_data.decode("utf-8"))
+                latest_tag = data.get("tag_name", "").strip()
+                release_notes = data.get("body", "").strip()
+                html_url = data.get("html_url", f"https://github.com/{APP_GITHUB_REPO}/releases")
 
-                    has_update = bool(latest_tag and latest_tag != APP_VERSION)
-                    self.check_finished.emit(has_update, latest_tag, release_notes, html_url)
-                    return
+                has_update = bool(latest_tag and latest_tag != APP_VERSION)
+                self.check_finished.emit(has_update, latest_tag, release_notes, html_url)
+                return
         except Exception as e_api:
-            # 2. 降级备用通道：当 API 遇到匿名限流 (HTTP 403) 或局域网解析异常时，直接探测 GitHub Web 重定向
+            # 2. 降级备用通道：当 API 遇到匿名限流 (HTTP 403) 或接口解析异常时，直接探测 GitHub Web 重定向
             try:
                 web_url = f"https://github.com/{APP_GITHUB_REPO}/releases/latest"
-                req_web = urllib.request.Request(web_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req_web, timeout=6) as resp_web:
-                    final_url = resp_web.geturl()
-                    extracted_tag = final_url.split("/")[-1].strip()
-                    if extracted_tag and extracted_tag != "latest":
-                        has_update = bool(extracted_tag != APP_VERSION)
-                        self.check_finished.emit(
-                            has_update,
-                            extracted_tag,
-                            "新版本已发布！请点击下方按钮前往 GitHub 查看详细变更日志并下载对应平台的安装包。",
-                            final_url
-                        )
-                        return
+                status, _, final_url = fetch_network_resource(
+                    web_url,
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                extracted_tag = final_url.split("/")[-1].strip()
+                if extracted_tag and extracted_tag != "latest":
+                    has_update = bool(extracted_tag != APP_VERSION)
+                    self.check_finished.emit(
+                        has_update,
+                        extracted_tag,
+                        "新版本已发布！请点击下方按钮前往 GitHub 查看详细变更日志并下载对应平台的安装包。",
+                        final_url
+                    )
+                    return
             except Exception:
                 pass
             self.check_error.emit(f"无法获取版本信息: {e_api}")
