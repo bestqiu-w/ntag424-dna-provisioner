@@ -1795,6 +1795,55 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.main_tabs)
 
+        # 3. 固定底部状态栏 (永久占位，杜绝跳动并多维展示运行态)
+        self.setup_status_bar()
+
+    def setup_status_bar(self):
+        """初始化固定底部状态栏，杜绝动态生成导致的界面跳动，并提供多维度实时信息监控。"""
+        status_bar = self.statusBar()
+        status_bar.setSizeGripEnabled(False)
+        status_bar.setStyleSheet("""
+            QStatusBar {
+                background-color: #F8FAFC;
+                color: #475569;
+                border-top: 1px solid #E2E8F0;
+                font-size: 11px;
+                min-height: 25px;
+                max-height: 25px;
+                padding: 0px 6px;
+            }
+            QStatusBar::item {
+                border: none;
+            }
+        """)
+
+        # 1. 左侧动态主状态信息标签（常驻，默认“系统就绪”）
+        self.sb_status_msg = QLabel("系统就绪")
+        self.sb_status_msg.setStyleSheet("color: #475569; font-size: 11px;")
+        status_bar.addWidget(self.sb_status_msg, 1)
+
+        # 2. 右侧常驻模块 1：当前配方
+        r_name = self.config.get("recipe_name", "默认配方")
+        algo = self.config.get("kdf_algorithm", "HKDF-SHA256")
+        self.sb_recipe_label = QLabel(f"配方: {r_name} ({algo})")
+        self.sb_recipe_label.setStyleSheet("color: #475569; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
+        status_bar.addPermanentWidget(self.sb_recipe_label)
+
+        # 3. 右侧常驻模块 2：读卡器硬件状态
+        self.sb_reader_label = QLabel("读卡器: ○ 未连接")
+        self.sb_reader_label.setStyleSheet("color: #DC2626; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
+        status_bar.addPermanentWidget(self.sb_reader_label)
+
+        # 4. 右侧常驻模块 3：当前活动卡片
+        self.sb_card_label = QLabel("卡片: 未感应")
+        self.sb_card_label.setStyleSheet("color: #64748B; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
+        status_bar.addPermanentWidget(self.sb_card_label)
+
+        # 5. 右侧常驻模块 4：软件版本号
+        self.sb_version_label = QLabel(f"{APP_VERSION}")
+        self.sb_version_label.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 600; padding: 0 8px; border-left: 1px solid #CBD5E1;")
+        status_bar.addPermanentWidget(self.sb_version_label)
+
     def setup_workstation_tab(self, parent: QWidget):
         layout = QVBoxLayout(parent)
         layout.setSpacing(8)
@@ -2398,6 +2447,9 @@ class MainWindow(QMainWindow):
     def update_recipe_banner(self):
         name = self.config.get("recipe_name", "Default_Patrol")
         self.lbl_recipe_title.setText(f"当前配方: {name}")
+        if hasattr(self, "sb_recipe_label"):
+            algo = self.config.get("kdf_algorithm", "HKDF-SHA256")
+            self.sb_recipe_label.setText(f"配方: {name} ({algo})")
 
     def show_recipe_summary_dialog(self):
         """弹出 Key-Value 简单概览弹窗。"""
@@ -2652,6 +2704,9 @@ class MainWindow(QMainWindow):
         self.current_card_uid = uid_hex
         self.lbl_card_status.setText(f"<span style='color:#16A34A;'>●</span> <span style='color:#0F172A; font-weight:600;'>卡片已就绪:</span> <span style='font-family: Menlo, Monaco, Consolas, monospace; font-weight:bold; color:#1E293B;'>{uid_hex}</span>")
         self._update_single_buttons_state()
+        if hasattr(self, "sb_card_label"):
+            self.sb_card_label.setText(f"卡片: {uid_hex}")
+            self.sb_card_label.setStyleSheet("color: #2563EB; font-family: Menlo, Monaco, Consolas, monospace; font-weight: bold; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
 
     def on_card_removed(self):
         self.current_card_uid = None
@@ -2661,6 +2716,9 @@ class MainWindow(QMainWindow):
         self.btn_single_provision.setText("发卡注入")
         self.btn_single_restore.setText("恢复出厂")
         self.btn_single_inspect.setText("读取诊断")
+        if hasattr(self, "sb_card_label"):
+            self.sb_card_label.setText("卡片: 未感应")
+            self.sb_card_label.setStyleSheet("color: #64748B; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
 
     def toggle_batch_running(self):
         if not self.worker.batch_running:
@@ -2696,15 +2754,22 @@ class MainWindow(QMainWindow):
             self.reader_status_label.setText(f"<span style='color:#16A34A;'>●</span> <span style='color:#1E293B; font-weight:500;'>{message}</span>")
             self.lbl_hw_device.setText(f"● {message}")
             self.lbl_hw_device.setStyleSheet("color: #16A34A; font-weight: bold; background: transparent; border: none;")
+            if hasattr(self, "sb_reader_label"):
+                self.sb_reader_label.setText(f"读卡器: ● {message}")
+                self.sb_reader_label.setStyleSheet("color: #16A34A; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
         else:
             self.reader_status_label.setText(f"<span style='color:#DC2626;'>○</span> <span style='color:#991B1B;'>{message}</span>")
             self.lbl_hw_device.setText("○ 未检测到读卡器 (请插入 USB)")
             self.lbl_hw_device.setStyleSheet("color: #DC2626; font-weight: bold; background: transparent; border: none;")
             self.lbl_card_status.setText("<span style='color:#DC2626;'>○</span> <span style='color:#64748B;'>读卡器未就绪</span>")
+            if hasattr(self, "sb_reader_label"):
+                self.sb_reader_label.setText("读卡器: ○ 未连接")
+                self.sb_reader_label.setStyleSheet("color: #DC2626; font-size: 11px; padding: 0 8px; border-left: 1px solid #CBD5E1;")
             self.on_card_removed()
 
     def on_status_update(self, state: str, message: str):
-        pass
+        if hasattr(self, "sb_status_msg") and message:
+            self.sb_status_msg.setText(message)
 
     # -------------------------------------------------------------
     # 顶部菜单栏与全局快捷键 (Native Menu Bar & Hotkeys)
