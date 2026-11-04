@@ -54,6 +54,7 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     QByteArray,
+    QTimer,
 )
 from PySide6.QtGui import (
     QFont,
@@ -1280,22 +1281,28 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
 APP_VERSION = "v1.0.4"
-APP_GITHUB_REPO = "bestqiu-w/ntag424-pro"
+APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
 
 
 class UpdateCheckThread(QThread):
-    check_finished = Signal(bool, str, str, str)  # has_update, latest_tag, release_notes, download_url
+    # Signals: has_update: bool, latest_tag: str, release_notes: str, download_url: str
+    check_finished = Signal(bool, str, str, str)
     check_error = Signal(str)
 
     def run(self):
         import urllib.request
         import json
-        url = f"https://api.github.com/repos/{APP_GITHUB_REPO}/releases/latest"
+
+        # 1. 优先使用 GitHub 官方 REST API 查询最新版本元数据
+        api_url = f"https://api.github.com/repos/{APP_GITHUB_REPO}/releases/latest"
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "NTAG424-Pro-App"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            req = urllib.request.Request(api_url, headers={
+                "User-Agent": "NTAG424-Pro-App",
+                "Accept": "application/vnd.github.v3+json"
+            })
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 if resp.status == 200:
-                    data = json.loads(resp.read().decode())
+                    data = json.loads(resp.read().decode("utf-8"))
                     latest_tag = data.get("tag_name", "").strip()
                     release_notes = data.get("body", "").strip()
                     html_url = data.get("html_url", f"https://github.com/{APP_GITHUB_REPO}/releases")
@@ -1303,9 +1310,26 @@ class UpdateCheckThread(QThread):
                     has_update = bool(latest_tag and latest_tag != APP_VERSION)
                     self.check_finished.emit(has_update, latest_tag, release_notes, html_url)
                     return
-            self.check_error.emit("服务器返回了未预期的 HTTP 状态码")
-        except Exception as e:
-            self.check_error.emit(str(e))
+        except Exception as e_api:
+            # 2. 降级备用通道：当 API 遇到匿名限流 (HTTP 403) 或局域网解析异常时，直接探测 GitHub Web 重定向
+            try:
+                web_url = f"https://github.com/{APP_GITHUB_REPO}/releases/latest"
+                req_web = urllib.request.Request(web_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req_web, timeout=6) as resp_web:
+                    final_url = resp_web.geturl()
+                    extracted_tag = final_url.split("/")[-1].strip()
+                    if extracted_tag and extracted_tag != "latest":
+                        has_update = bool(extracted_tag != APP_VERSION)
+                        self.check_finished.emit(
+                            has_update,
+                            extracted_tag,
+                            "新版本已发布！请点击下方按钮前往 GitHub 查看详细变更日志并下载对应平台的安装包。",
+                            final_url
+                        )
+                        return
+            except Exception:
+                pass
+            self.check_error.emit(f"无法获取版本信息: {e_api}")
 
 
 class UpdateDialog(QDialog):
@@ -1599,6 +1623,9 @@ class MainWindow(QMainWindow):
 
         # Start background polling worker
         self.worker.start()
+
+        # 启动 3.5 秒后在后台静默检查新版本（仅在有更新时提醒，无更新则静默）
+        QTimer.singleShot(3500, lambda: self.check_for_updates(manual=False))
 
     def center_on_top_screen(self):
         screen = self.screen() or QApplication.primaryScreen()
@@ -2849,7 +2876,10 @@ class MainWindow(QMainWindow):
             return
         self.update_checker_thread = UpdateCheckThread(self)
         self.update_checker_thread.check_finished.connect(
-            lambda has_up, tag, url, body, err: self.on_update_check_finished(has_up, tag, url, body, err, manual)
+            lambda has_up, tag, notes, url: self.on_update_check_finished(has_up, tag, url, notes, "", manual)
+        )
+        self.update_checker_thread.check_error.connect(
+            lambda err: self.on_update_check_finished(False, "", "", "", err, manual)
         )
         self.update_checker_thread.start()
         if manual:
@@ -2862,6 +2892,7 @@ class MainWindow(QMainWindow):
             return
 
         if has_update:
+            self.statusBar().showMessage(f"🎉 发现新版本 {latest_tag}，可在【帮助 -> 检查新版本】中下载", 10000)
             dlg = UpdateDialog(latest_tag, release_notes, release_url, self)
             dlg.exec()
         else:

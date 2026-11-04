@@ -100,5 +100,5 @@ python app.py
 ---
 
 ## 四、 GitHub 仓库
-* 仓库主页：[https://github.com/bestqiu-w/ntag424-pro](https://github.com/bestqiu-w/ntag424-pro)
+* 仓库主页：[https://github.com/bestqiu-w/ntag424-dna-provisioner](https://github.com/bestqiu-w/ntag424-dna-provisioner)
 * License: MIT
