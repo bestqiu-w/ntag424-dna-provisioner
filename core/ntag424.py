@@ -347,6 +347,7 @@ class NTAG424Manager:
             # 3. Authenticate with Key 0 (re-select application after ISO Select File)
             self.select_ndef_application()
             auth_ok = False
+            card_already_provisioned = False
             try:
                 self.authenticate_ev2_first(0, current_key0)
                 auth_ok = True
@@ -357,6 +358,7 @@ class NTAG424Manager:
                         self.authenticate_ev2_first(0, derived_keys[0])
                         current_key0 = derived_keys[0]
                         auth_ok = True
+                        card_already_provisioned = True
                     except Exception:
                         pass
 
@@ -368,15 +370,30 @@ class NTAG424Manager:
                 try:
                     self.reset_file_settings_plain(0x02)
                     self.write_ndef_binary(sdm_cfg.ndef_record_bytes)
-                    self.select_ndef_application()
-                    self.authenticate_ev2_first(0, current_key0)
                 except Exception as e:
                     logger.warning(f"Writing NDEF after reset warning: {e}")
+                finally:
+                    # 确保无论写入是否产生异常，均重新切回 NDEF 应用并恢复 EV2 认证会话
+                    try:
+                        self.select_ndef_application()
+                        self.authenticate_ev2_first(0, current_key0)
+                    except Exception:
+                        pass
 
             # 4. Change Keys 1..4 (sub-keys)
             for k in range(1, 5):
                 old_sub_key = derived_keys[k] if current_key0 == derived_keys[0] else b"\x00" * 16
-                self.change_key(k, derived_keys[k], old_key=old_sub_key, key_ver=key_ver)
+                try:
+                    self.change_key(k, derived_keys[k], old_key=old_sub_key, key_ver=key_ver)
+                except Exception as ce:
+                    # 备选回退：若卡片曾写入过派生密钥或仍为出厂全0，尝试另一候选密钥
+                    alt_key = b"\x00" * 16 if old_sub_key != b"\x00" * 16 else derived_keys[k]
+                    try:
+                        self.change_key(k, derived_keys[k], old_key=alt_key, key_ver=key_ver)
+                    except Exception:
+                        if card_already_provisioned:
+                            raise NTAG424ProtocolError("该卡片已成功发卡注入，无需重复发卡 (如需重新发卡请先恢复出厂)")
+                        raise ce
 
             # 5. File Settings Configuration
             # File 01 (CC File - 32 bytes)

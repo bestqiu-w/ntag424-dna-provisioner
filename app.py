@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QStackedWidget,
     QSizePolicy,
+    QAbstractItemView,
 )
 from PySide6.QtCore import (
     Qt,
@@ -50,6 +51,9 @@ from PySide6.QtCore import (
     QModelIndex,
     QUrl,
     QPointF,
+    QRectF,
+    QSize,
+    QByteArray,
 )
 from PySide6.QtGui import (
     QFont,
@@ -1275,7 +1279,7 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # ==============================================================================
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
-APP_VERSION = "v1.0.3"
+APP_VERSION = "v1.0.4"
 APP_GITHUB_REPO = "bestqiu-w/ntag424-pro"
 
 
@@ -1514,6 +1518,39 @@ def make_clear_icon(color_hex: str = "#64748B", size: int = 16) -> QIcon:
     return QIcon(pix)
 
 
+def make_reset_icon(color_hex: str = "#2563EB", size: int = 14) -> QIcon:
+    """生成精致抗锯齿矢量旋转刷新图标（支持常态与禁用态）"""
+    icon = QIcon()
+    try:
+        from PySide6.QtSvg import QSvgRenderer
+        for mode, color in [(QIcon.Mode.Normal, color_hex), (QIcon.Mode.Disabled, "#94A3B8")]:
+            svg_data = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+              <polyline points="21 3 21 8 16 8"/>
+            </svg>'''
+            renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+            pix = QPixmap(size * 2, size * 2)
+            pix.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pix)
+            renderer.render(painter)
+            painter.end()
+            icon.addPixmap(pix, mode)
+        return icon
+    except Exception:
+        pix = QPixmap(size * 2, size * 2)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color_hex), 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        rect = QRectF(4.0, 4.0, size * 2 - 8.0, size * 2 - 8.0)
+        painter.drawArc(rect, 45 * 16, 270 * 16)
+        painter.end()
+        return QIcon(pix)
+
+
 # ==============================================================================
 # 主窗口 (MainWindow)
 # ==============================================================================
@@ -1545,6 +1582,7 @@ class MainWindow(QMainWindow):
 
         self.worker = NFCWorker()
         self.worker.reader_status.connect(self.on_reader_status)
+        self.worker.reader_reset_finished.connect(self.on_reader_reset_finished)
         self.worker.card_detected.connect(self.on_card_detected)
         self.worker.card_removed.connect(self.on_card_removed)
         self.worker.status_update.connect(self.on_status_update)
@@ -1619,6 +1657,40 @@ class MainWindow(QMainWindow):
             padding: 2px 4px;
         """)
         h_layout.addWidget(self.reader_status_label)
+
+        # Software Reset Reader Button
+        self.btn_reset_reader_header = QPushButton("重置连接")
+        self.btn_reset_reader_header.setIcon(make_reset_icon("#2563EB", 13))
+        self.btn_reset_reader_header.setIconSize(QSize(13, 13))
+        self.btn_reset_reader_header.setToolTip("重置 PC/SC 驱动与读卡器硬件会话，清除僵尸句柄并重新建立通信 (Ctrl+Shift+U)")
+        self.btn_reset_reader_header.setFixedHeight(24)
+        self.btn_reset_reader_header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reset_reader_header.setStyleSheet("""
+            QPushButton {
+                background-color: #EFF6FF;
+                color: #2563EB;
+                border: 1px solid #BFDBFE;
+                border-radius: 4px;
+                padding: 1px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #DBEAFE;
+                border-color: #93C5FD;
+                color: #1D4ED8;
+            }
+            QPushButton:pressed {
+                background-color: #BFDBFE;
+            }
+            QPushButton:disabled {
+                background-color: #F1F5F9;
+                color: #94A3B8;
+                border-color: #E2E8F0;
+            }
+        """)
+        self.btn_reset_reader_header.clicked.connect(self.trigger_reader_reset)
+        h_layout.addWidget(self.btn_reset_reader_header)
 
         main_layout.addWidget(header_bar)
 
@@ -2083,6 +2155,7 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.table.setModel(self.proxy_model)
         self.table.setSortingEnabled(True)
+        self.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
@@ -2241,7 +2314,7 @@ class MainWindow(QMainWindow):
             "• macOS 用户: 本系统通过 macOS 原生 PC/SC (SmartCardServices) 直接通信，无需安装繁琐第三方驱动。\n"
             "• Windows 用户: 请确保已安装 ACS 官方 ACR122U USB 驱动，智能卡系统服务 (Smart Card Service) 处于运行状态。\n"
             "• Linux 用户: 需预先安装 pcscd 及 libpcsclite，并启动 pcscd 服务守护进程。\n"
-            "• 遇读卡器无响应: 可拔出 USB 重新插入，或点击上方【重新检测读卡器】刷新。"
+            "• 遇通信死锁或服务异常: 可点击右上角常驻的【重置连接】（或按快捷键 Ctrl+Shift+U）彻底清除驱动层残留句柄并重新连接。"
         )
         guide_text.setStyleSheet("color: #475569; font-size: 11px; line-height: 1.5;")
         l_guide.addWidget(guide_text)
@@ -2310,6 +2383,25 @@ class MainWindow(QMainWindow):
             self.append_log(f"[WARN] 扫描异常: {e}")
             QMessageBox.warning(self, "PC/SC 异常", f"无法枚举智能卡读卡器:\n\n{e}\n\n可能原因: 操作系统智能卡服务 (pcscd / Smart Card) 未启动。")
 
+    def trigger_reader_reset(self):
+        """触发重置读卡器驱动连接与 PC/SC 资源"""
+        if hasattr(self, "btn_reset_reader_header"):
+            self.btn_reset_reader_header.setEnabled(False)
+            self.btn_reset_reader_header.setText("重置中...")
+        self.append_log("[INFO] 正在重置读卡器驱动连接并重新初始化 PC/SC 服务...")
+        self.worker.request_reader_reset()
+
+    def on_reader_reset_finished(self, success: bool, msg: str):
+        if hasattr(self, "btn_reset_reader_header"):
+            self.btn_reset_reader_header.setEnabled(True)
+            self.btn_reset_reader_header.setText("重置连接")
+        if success:
+            self.statusBar().showMessage(f"读卡器重置成功: {msg}", 4000)
+            self.append_log(f"[INFO] 读卡器驱动连接重置完成: {msg}")
+        else:
+            self.statusBar().showMessage(f"读卡器重置失败: {msg}", 5000)
+            self.append_log(f"[WARN] 读卡器驱动连接重置未发现可用硬件: {msg}")
+
     def append_log(self, text: str):
         now_str = datetime.now().strftime("%H:%M:%S")
         time_tag = f"<span style='color: #64748B;'>[{now_str}]</span>"
@@ -2370,6 +2462,8 @@ class MainWindow(QMainWindow):
         self.worker.set_work_mode(mode_str)
 
         if is_single:
+            if self.worker.current_detected_uid:
+                self.current_card_uid = self.worker.current_detected_uid
             if self.current_card_uid:
                 self.lbl_card_status.setText(f"<span style='color:#16A34A;'>●</span> <span style='color:#0F172A; font-weight:600;'>卡片已就绪:</span> <span style='font-family: Menlo, Monaco, Consolas, monospace; font-weight:bold; color:#1E293B;'>{self.current_card_uid}</span>")
             else:
@@ -2587,6 +2681,11 @@ class MainWindow(QMainWindow):
         act_refresh_reader.setShortcut(QKeySequence.Refresh)
         act_refresh_reader.triggered.connect(self.on_refresh_reader_clicked)
         menu_hw.addAction(act_refresh_reader)
+
+        act_reset_reader = QAction("重置读卡器驱动连接(&Z)", self)
+        act_reset_reader.setShortcut(QKeySequence("Ctrl+Shift+U"))
+        act_reset_reader.triggered.connect(self.trigger_reader_reset)
+        menu_hw.addAction(act_reset_reader)
 
         menu_hw.addSeparator()
 
@@ -2822,7 +2921,18 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------
     def on_tag_processed(self, record: dict):
         self.table_model.add_record(record)
-        self.table.scrollToBottom()
+
+        # 确保表格视口精准滚动到最新增加的记录（无论当前是否应用筛选或排序）
+        source_idx = self.table_model.index(self.table_model.rowCount() - 1, 0)
+        proxy_idx = self.proxy_model.mapFromSource(source_idx)
+        if proxy_idx.isValid():
+            self.table.scrollTo(proxy_idx, QAbstractItemView.ScrollHint.PositionAtTop if proxy_idx.row() == 0 else QAbstractItemView.ScrollHint.EnsureVisible)
+            self.table.selectRow(proxy_idx.row())
+        else:
+            if self.proxy_model.sortOrder() == Qt.SortOrder.DescendingOrder and self.proxy_model.sortColumn() == 0:
+                self.table.scrollToTop()
+            else:
+                self.table.scrollToBottom()
 
         total = len(self.table_model._records)
         succ = sum(1 for r in self.table_model._records if r.get("status") == "SUCCESS")
