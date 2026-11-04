@@ -2,6 +2,7 @@
 NTAG424 Pro - NTAG 424 DNA 标签发卡与运维工具 (ntag424-pro)
 基于 PySide6 与 pyscard，支持 ACS ACR122U NFC 读写器。
 """
+from __future__ import annotations
 
 import sys
 import os
@@ -9,7 +10,9 @@ import json
 import re
 import html
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
+
+from PySide6.QtSvg import QSvgRenderer
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -1280,7 +1283,7 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # ==============================================================================
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
-APP_VERSION = "v1.0.6"
+APP_VERSION = "v1.0.5"
 APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
 
 

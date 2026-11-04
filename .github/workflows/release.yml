@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (e.g. v1.0.6)'
+        description: 'Release Tag (e.g. v1.0.5)'
         required: true
-        default: 'v1.0.6'
+        default: 'v1.0.5'
 
 permissions:
   contents: write
@@ -71,6 +71,8 @@ jobs:
             --hidden-import "smartcard.pcsc" \
             --hidden-import "smartcard.System" \
             --hidden-import "cryptography" \
+            --hidden-import "PySide6.QtSvg" \
+            --hidden-import "certifi" \
             --exclude-module "PySide6.QtWebEngineCore" \
             --exclude-module "PySide6.QtWebEngineWidgets" \
             --exclude-module "PySide6.QtWebEngineQuick" \
@@ -162,7 +164,7 @@ jobs:
           elif [[ -n "${{ inputs.release_tag }}" ]]; then
             echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=v1.0.6" >> $GITHUB_OUTPUT
+            echo "tag=v1.0.5" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish to GitHub Releases
