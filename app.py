@@ -1280,7 +1280,7 @@ class RecordFilterProxyModel(QSortFilterProxyModel):
 # ==============================================================================
 # 在线更新检测线程与关于弹窗
 # ==============================================================================
-APP_VERSION = "v1.0.4"
+APP_VERSION = "v1.0.5"
 APP_GITHUB_REPO = "bestqiu-w/ntag424-dna-provisioner"
 
 
